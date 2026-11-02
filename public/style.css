@@ -545,7 +545,9 @@ main { padding: 20px; }
 .cues { display: grid; gap: 4px; margin-top: 14px; }
 .cue {
   display: grid;
-  grid-template-columns: 30px 72px 64px 210px 210px minmax(max-content, 1fr);
+  /* колонки фейдов ужимаются (селект переносится под цифру), а не выталкивают кнопки за край;
+     у кнопок постоянный минимум — иначе в заголовке (без кнопок) колонки разъедутся со строками */
+  grid-template-columns: 30px 72px 64px minmax(0, 210px) minmax(0, 210px) minmax(145px, 1fr);
   gap: 10px;
   align-items: center;
   padding: 6px 10px;
