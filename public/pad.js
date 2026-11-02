@@ -1,7 +1,8 @@
-// Панель эфира: раздел «Игра» (отбивка + пэды) и раздел «Фон».
+// Панель эфира: раздел «Игра» (отбивка + пэды), «Фон» и «Уровни» (крутилки громкости).
 // Одна и та же на ноутбуке (колонками) и на телефоне (вкладками).
 // send(msg) — что делать при нажатии; возвращает функцию для показа статуса.
-export function renderPad(root, settings, send, { tabs = false, master = false } = {}) {
+// analyser — только на ноутбуке: откуда брать спектр для экрана в «Уровнях».
+export function renderPad(root, settings, send, { tabs = false, master = false, analyser = null } = {}) {
   // Все банки рисуем сразу, видимый переключается статусом — без перерисовки и задержки
   const banks = settings.banks.map((b, bank) => {
     const pads = b.pads.map((p, i) => ({ ...p, bank, slot: i })).filter((p) => p.file);
@@ -23,6 +24,7 @@ export function renderPad(root, settings, send, { tabs = false, master = false }
     ${tabs ? `<div class="seg">
       <button data-tab="game" class="active">Игра<i class="dot" id="dot-game"></i></button>
       <button data-tab="bg">Фон<i class="dot" id="dot-bg"></i></button>
+      <button data-tab="levels">Уровни</button>
     </div>` : ''}
     <div class="toast" id="toast"></div>
     <div class="deck-grid ${tabs ? 'tabs' : ''}">
@@ -36,11 +38,8 @@ export function renderPad(root, settings, send, { tabs = false, master = false }
         ${jtags}
         ${bankBar}
         <div class="pads-scroll">${banks}</div>
-        <div class="knobs game-knobs">
-          <div class="knob small" data-target="jingles"></div>
-          <div class="knob small" data-target="pads"></div>
-        </div>
       </section>
+      <div class="side">
       <section class="deck bg" data-sec="bg" ${tabs ? 'hidden' : ''}>
         <h3>Фон</h3>
         <div class="vinyl-wrap">
@@ -60,11 +59,21 @@ export function renderPad(root, settings, send, { tabs = false, master = false }
           <button class="btn stop" data-cmd="bgStop">■<small>Stop</small></button>
           <button class="btn" data-cmd="bgNext">⏭<small>Дальше</small></button>
         </div>
+      </section>
+      <section class="levels" data-sec="levels" ${tabs ? 'hidden' : ''}>
+        <span class="screw tl"></span><span class="screw tr"></span><span class="screw bl"></span><span class="screw br"></span>
+        ${analyser ? `<div class="screen">
+          <canvas></canvas>
+          <div class="screen-scale">${SPECTRUM_MARKS.map(([f, t]) => `<span style="left:${bandPos(f) * 100}%">${t}</span>`).join('')}</div>
+        </div>` : ''}
         <div class="knobs">
           <div class="knob" data-target="bg"></div>
-          ${master ? '<div class="knob master" data-target="master"></div>' : ''}
+          <div class="knob" data-target="jingles"></div>
+          <div class="knob" data-target="pads"></div>
+          ${master ? '<i class="knob-sep"></i><div class="knob" data-target="master"></div>' : ''}
         </div>
       </section>
+      </div>
     </div>`;
 
   root.querySelectorAll('button[data-cmd]').forEach((b) =>
@@ -99,11 +108,12 @@ export function renderPad(root, settings, send, { tabs = false, master = false }
   const knobs = {};
   root.querySelectorAll('.knob').forEach((el) => {
     const target = el.dataset.target;
-    const label = { master: 'Master', bg: 'Громкость фона', jingles: 'Отбивки', pads: 'Пэды' }[target];
+    const label = { master: 'Master', bg: 'Фон', jingles: 'Отбивки', pads: 'Пэды' }[target];
     knobs[target] = makeKnob(el, label, (value) =>
       send({ type: 'cmd', cmd: 'volume', target, value }),
     );
   });
+  if (analyser) runSpectrum(root.querySelector('.screen canvas'), analyser);
 
   const $ = (sel) => root.querySelector(sel);
   let bgClock = null;
@@ -195,8 +205,18 @@ function padHtml(p) {
   const mode = p.mode === 'hold' ? 'data-hold' : 'data-cmd="pad"';
   const badge = { loop: '⟳', hold: '✋' }[p.mode] || '';
   return `<button class="pad-cell h${p.slot} ${p.image ? 'has-img' : ''}" ${mode} data-bank="${p.bank}" data-slot="${p.slot}" ${bg}>
-    <span class="hue"></span><span class="name">${escapeHtml(p.name)}</span>${badge ? `<i class="mode">${badge}</i>` : ''}<b class="bar"></b>
+    <span class="hue"></span>${padName(p.name)}${badge ? `<i class="mode">${badge}</i>` : ''}<b class="bar"></b>
   </button>`;
+}
+
+// Название пэда крупно и капсом. Размер шрифта CSS считает от ширины пэда и ширины
+// самого длинного слова (--w, в долях размера шрифта), чтобы слово целиком влезало в строку.
+// Ширина букв в Unbounded разная: Ш и W почти в полтора раза шире A, поэтому считаем примерно по буквам.
+const letterWidth = (ch) => (/[MWЖШЩЫЮФ]/i.test(ch) ? 1.35 : /[I1!.,':;|]/.test(ch) ? 0.5 : 0.95);
+export function padName(name) {
+  const words = String(name).split(/[\s-]+/);
+  const w = Math.max(3.5, ...words.map((word) => [...word].reduce((sum, ch) => sum + letterWidth(ch), 0)));
+  return `<span class="name" style="--w:${w.toFixed(2)}">${escapeHtml(name)}</span>`;
 }
 
 // Полоса прогресса двигается сама CSS-анимацией — без потока сообщений.
@@ -257,6 +277,74 @@ function makeKnob(el, label, onChange) {
   dial.addEventListener('wheel', (e) => { e.preventDefault(); change(value - Math.sign(e.deltaY) * 0.05); }, { passive: false });
   draw();
   return { set: (v) => { if (!dragging && pending === null && typeof v === 'number') { value = v; draw(); } } };
+}
+
+// Экран спектра в «Уровнях»: полосы одним цветом, как на старых приборах с вакуумным дисплеем.
+// Полосы — по октавам в логарифмической шкале, у каждой «светодиоды» и пиковая отметка.
+const F_LO = 40, F_HI = 16000, BANDS = 30, SEGS = 16;
+const bandPos = (f) => Math.log(f / F_LO) / Math.log(F_HI / F_LO);
+const SPECTRUM_MARKS = [[60, '60'], [125, '125'], [250, '250'], [500, '500'], [1000, '1k'], [2000, '2k'], [4000, '4k'], [8000, '8k']];
+
+function runSpectrum(canvas, getAnalyser) {
+  const g = canvas.getContext('2d');
+  const level = new Float32Array(BANDS), peak = new Float32Array(BANDS), peakAt = new Float64Array(BANDS);
+  let data = null, last = performance.now();
+  const frame = (now) => {
+    if (!canvas.isConnected) return; // панель перерисовали — этот экран больше не нужен
+    requestAnimationFrame(frame);
+    if (!canvas.offsetParent) return; // открыта другая вкладка — не рисуем зря
+    const dt = Math.min(0.1, (now - last) / 1000);
+    last = now;
+    const an = getAnalyser();
+    if (an && (!data || data.length !== an.frequencyBinCount)) data = new Float32Array(an.frequencyBinCount);
+    if (an) an.getFloatFrequencyData(data);
+    const hz = an ? an.context.sampleRate / 2 / data.length : 1;
+    for (let i = 0; i < BANDS; i++) {
+      let v = 0;
+      if (an) {
+        // громче всего звучащий бин внутри полосы: −80…−10 дБ → 0…1
+        const b0 = Math.floor(F_LO * (F_HI / F_LO) ** (i / BANDS) / hz);
+        const b1 = Math.max(b0 + 1, Math.floor(F_LO * (F_HI / F_LO) ** ((i + 1) / BANDS) / hz));
+        let db = -Infinity;
+        for (let k = b0; k < b1; k++) db = Math.max(db, data[k]);
+        v = Math.max(0, Math.min(1, (db + 80) / 70));
+      }
+      level[i] = Math.max(v, level[i] - dt * 1.6); // растёт сразу, опадает плавно
+      if (level[i] >= peak[i]) { peak[i] = level[i]; peakAt[i] = now; }
+      else if (now - peakAt[i] > 700) peak[i] = Math.max(level[i], peak[i] - dt * 0.7);
+    }
+    draw();
+  };
+  function draw() {
+    const dpr = devicePixelRatio || 1;
+    const W = Math.round(canvas.clientWidth * dpr), H = Math.round(canvas.clientHeight * dpr);
+    if (canvas.width !== W || canvas.height !== H) { canvas.width = W; canvas.height = H; }
+    g.clearRect(0, 0, W, H);
+    const color = getComputedStyle(canvas).color;
+    const gap = 2 * dpr;
+    const bw = (W - gap * (BANDS - 1)) / BANDS;
+    const sh = (H - gap * (SEGS - 1)) / SEGS;
+    const seg = (i, s) => g.rect(i * (bw + gap), H - (s + 1) * (sh + gap) + gap, bw, sh);
+    // погашенные сегменты чуть видны — как на настоящем дисплее
+    g.fillStyle = color;
+    g.globalAlpha = 0.07;
+    g.beginPath();
+    for (let i = 0; i < BANDS; i++) for (let s = 0; s < SEGS; s++) seg(i, s);
+    g.fill();
+    g.globalAlpha = 1;
+    g.shadowColor = color;
+    g.shadowBlur = 8 * dpr;
+    g.beginPath();
+    for (let i = 0; i < BANDS; i++) {
+      const n = Math.round(level[i] * SEGS);
+      for (let s = 0; s < n; s++) seg(i, s);
+      const p = Math.round(peak[i] * SEGS) - 1;
+      if (p >= n) seg(i, p);
+    }
+    g.fill();
+    g.shadowBlur = 0;
+  }
+  requestAnimationFrame(frame);
 }
 
 const fmt = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, '0')}`;

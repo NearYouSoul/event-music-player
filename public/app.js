@@ -1,7 +1,7 @@
 import WaveSurfer from '/vendor/wavesurfer/wavesurfer.esm.js';
 import RegionsPlugin from '/vendor/wavesurfer/plugins/regions.esm.js';
 import { Engine, Rotation, cueOf } from '/engine.js';
-import { renderPad, connect, escapeHtml, padKey, applyTextures } from '/pad.js';
+import { renderPad, connect, escapeHtml, padKey, applyTextures, padName } from '/pad.js';
 import { CURVES, fitFades, loudness, dbToGain } from '/envelope.js';
 import { attachEnvelope, previewer } from '/wave-envelope.js';
 import { mountMixer } from '/mixer-ui.js';
@@ -11,6 +11,8 @@ const $ = (s) => document.querySelector(s);
 const api = async (url, body) =>
   (await fetch(url, body ? { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {})).json();
 const fmt = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`;
+// Имя трека без расширения: в списках и заголовках .mp3 только мешает
+const trackName = (f) => f.replace(/\.[^.]+$/, '');
 const AUDIO_RE = /\.(mp3|wav|ogg|m4a|aac|flac)$/i;
 const IMAGE_RE = /\.(png|jpe?g|webp|gif|avif)$/i;
 // Эталон для «Авто-громкости» пэда: средняя громкость дропов в отбивках, dBFS (см. loudness в envelope.js)
@@ -89,7 +91,10 @@ function saveSettings(patch) {
 let mountedKey = null; // какие настройки сейчас отрисованы в эфире
 function mountPad() {
   mountedKey = padKey(settings);
-  showStatus = renderPad($('#live-pad'), settings, (msg) => engine.command(msg), { master: true });
+  showStatus = renderPad($('#live-pad'), settings, (msg) => engine.command(msg), {
+    master: true,
+    analyser: () => engine?.strips?.master.analyser,
+  });
   if (engine) engine.emit();
 }
 
@@ -206,7 +211,7 @@ async function loadJingleList() {
     tagFilter === '*' ? true : tagFilter === NO_TAG ? !j.tags.length : j.tags.includes(tagFilter));
   $('#j-list').innerHTML = shown.length
     ? shown.map((j) => `<div data-name="${escapeHtml(j.name)}" draggable="true" class="${j.name === current ? 'active' : ''}">
-        <span>${escapeHtml(j.name)}</span><span class="count">${j.cues.length || ''}</span></div>`).join('')
+        <span>${escapeHtml(trackName(j.name))}</span><span class="count">${j.cues.length || ''}</span></div>`).join('')
     : `<div class="muted">${jingles.length ? 'В этом разделе пусто. Перетащи сюда треки из «Все».' : 'Папка пуста — закинь треки в music/jingles'}</div>`;
   $('#j-list').querySelectorAll('[data-name]').forEach((el) => {
     el.addEventListener('click', () => openJingle(el.dataset.name));
@@ -303,11 +308,15 @@ function openJingle(name) {
   dirty = false;
   jw?.ws.destroy();
   $('#j-editor').innerHTML = `
-    <h2>${escapeHtml(name)}</h2>
-    <div class="tagbar" id="e-tags"></div>
+    <div class="ed-head">
+      <h2>${escapeHtml(trackName(name))}</h2>
+      <span id="e-msg"></span>
+      <button class="btn" id="e-save">💾 Сохранить точки</button>
+    </div>
+    <div class="row"><span class="muted small">Разделы:</span><div class="tagbar" id="e-tags"></div></div>
     <div class="row">
-      <button class="btn" id="e-play">▶ / ❚❚</button>
-      <button class="btn accent" id="e-add">＋ Точка здесь (M)</button>
+      <button class="btn" id="e-play" title="Пробел">▶ / ❚❚</button>
+      <button class="btn" id="e-add" title="Клавиша M">＋ Точка здесь <kbd>M</kbd></button>
       <span id="e-time" class="mono">0:00.0</span>
       <span class="grow"></span>
       <button class="btn" id="e-out" title="Отдалить">−</button>
@@ -315,9 +324,8 @@ function openJingle(name) {
       <button class="btn" id="e-in" title="Приблизить">＋</button>
     </div>
     <div class="wave" id="waveform"></div>
-    <p class="hint">Колесо мыши над волной — зум. Область отбивки можно двигать целиком и тянуть за правый край (длина).
-      Белые ручки внутри — где кончается плавный вход и начинается затухание. Изменённые точки помечены «свои».</p>
-    <div class="row"><button class="btn" id="e-save">💾 Сохранить точки</button> <span id="e-msg"></span></div>
+    <p class="hint">Колесо мыши — зум. Область отбивки двигается целиком, правый край — длина.
+      Белые ручки внутри — где кончается плавный вход и начинается затухание.</p>
     <div class="cues" id="e-cues"></div>`;
   regions = RegionsPlugin.create();
   jw = createWave($('#waveform'), '/media/jingles/' + encodeURIComponent(name), regions);
@@ -387,18 +395,22 @@ function setCueParam(c, key, value) {
 }
 
 function renderCueList() {
+  // Таблица точек: «свои» — параметры точки отличаются от общих из «Настроек»
   $('#e-cues').innerHTML = cues.length
-    ? cues.map((c, i) => {
+    ? `<div class="cue cue-head"><span>#</span><span>Начало</span><span>Длина</span><span>Вход</span><span>Затухание</span><span></span></div>` +
+      cues.map((c, i) => {
         const f = cueFull(c);
-        return `<div class="row cue" data-i="${i}"><b>#${i + 1}</b> <span class="mono">${fmt(c.t)}</span>
-          <span class="muted small">${f.len.toFixed(1)} с · вход ${f.fadeIn.toFixed(2)} · затух. ${f.fadeOut.toFixed(2)}</span>
-          ${isCustom(c) ? '<span class="pill">свои</span>' : ''}
-          <span class="grow"></span>
-          <label class="small muted">вход <select data-curve="curveIn">${curveOptions(f.curveIn)}</select></label>
-          <label class="small muted">затух. <select data-curve="curveOut">${curveOptions(f.curveOut)}</select></label>
-          <button class="btn" data-play="${i}">▶</button>
-          ${isCustom(c) ? `<button class="btn" data-reset="${i}" title="Вернуть общие длину и затухания">↺</button>` : ''}
-          <button class="btn" data-del="${i}">✕</button></div>`;
+        return `<div class="cue ${isCustom(c) ? 'custom' : ''}" data-i="${i}">
+          <b>${i + 1}</b>
+          <span class="mono">${fmt(c.t)}</span>
+          <span class="mono">${f.len.toFixed(1)} с</span>
+          <span><span class="mono">${f.fadeIn.toFixed(2)} с</span> <select data-curve="curveIn">${curveOptions(f.curveIn)}</select></span>
+          <span><span class="mono">${f.fadeOut.toFixed(2)} с</span> <select data-curve="curveOut">${curveOptions(f.curveOut)}</select></span>
+          <span class="cue-acts">
+            ${isCustom(c) ? `<button class="btn" data-reset="${i}" title="Свои настройки. Нажми, чтобы вернуть общие длину и затухания">↺ свои</button>` : ''}
+            <button class="btn" data-play="${i}" title="Прослушать как в эфире">▶</button>
+            <button class="btn" data-del="${i}" title="Удалить точку">✕</button>
+          </span></div>`;
       }).join('')
     : '<p class="muted">Точек нет. Найди дроп, поставь курсор и нажми M.</p>';
   $('#e-cues').querySelectorAll('[data-play]').forEach((b) => (b.onclick = () => previewCue(Number(b.dataset.play))));
@@ -429,7 +441,8 @@ function previewCue(i) {
 
 function markDirty() {
   dirty = true;
-  $('#e-msg').innerHTML = '<span class="dirty">● есть несохранённые изменения</span>';
+  $('#e-msg').innerHTML = '<span class="dirty">● не сохранено</span>';
+  $('#e-save').classList.add('accent'); // кнопка загорается, только когда есть что сохранять
   renderCueList();
 }
 
@@ -438,6 +451,7 @@ async function saveCues() {
   cues = res.cues.map((c) => ({ ...cueOf(c) }));
   dirty = false;
   $('#e-msg').textContent = '✓ Сохранено';
+  $('#e-save').classList.remove('accent');
   loadJingleList();
 }
 
@@ -545,7 +559,7 @@ async function renderPadGrid() {
     <div class="pad-cell edit h${i} ${p.image ? 'has-img' : ''} ${p.file ? '' : 'unset'} ${p.file && !knownSamples.has(p.file) ? 'missing' : ''} ${i === selectedPad ? 'selected' : ''}"
          data-slot="${i}" ${p.image ? `style="--img:url('/media/images/${encodeURIComponent(p.image)}')"` : ''}>
       <span class="hue"></span>
-      <span class="name">${escapeHtml(p.name)}</span>
+      ${padName(p.name)}
       <small class="sub">${p.file ? (knownSamples.has(p.file) ? '♪' : '⚠ нет файла') : 'перетащи звук'}${p.image ? ' · 🖼' : ''}${badge(p)}</small>
     </div>`).join('');
   $('#p-grid').querySelectorAll('[data-slot]').forEach((el) => {
@@ -569,53 +583,75 @@ function openPad(slot) {
   padRegion = null;
   padEnv = null;
   $('#p-grid').querySelectorAll('[data-slot]').forEach((el) => el.classList.toggle('selected', Number(el.dataset.slot) === slot));
-  const opt = (v, text) => `<option value="${v}" ${(p.mode || 'oneshot') === v ? 'selected' : ''}>${text}</option>`;
+  const mode = (v, title, text) => `<label class="seg-opt"><input type="radio" name="p-mode" value="${v}"
+      ${(p.mode || 'oneshot') === v ? 'checked' : ''}><span><b>${title}</b><small>${text}</small></span></label>`;
+  // Сверху — что это за пэд, посередине — звук и картинка, снизу — как он звучит, в самом низу — сохранить
   $('#p-editor').innerHTML = `
-    <div class="row">
-      <h2>${escapeHtml(settings.banks[editBank].name)} · Пэд ${slot + 1}</h2>
-      <input id="p-name" value="${escapeHtml(p.name)}" maxlength="24" placeholder="Название">
-      <span class="grow"></span>
-      <button class="btn" id="p-file">♪ Выбрать звук</button>
-      <button class="btn" id="p-img">🖼 Картинка</button>
-      ${p.image ? '<button class="btn" id="p-noimg">Убрать картинку</button>' : ''}
-      <button class="btn stop" id="p-clear">Очистить пэд</button>
+    <div class="ed-head">
+      <span class="ed-slot">${escapeHtml(settings.banks[editBank].name)}${slot + 1}</span>
+      <input id="p-name" value="${escapeHtml(p.name)}" maxlength="24" placeholder="Название пэда">
+      <button class="btn stop" id="p-clear" title="Убрать звук, картинку и настройки">Очистить пэд</button>
       <input type="file" id="p-input" hidden>
     </div>
-    <div class="pad-art ${p.image ? 'has' : ''}" id="p-art" title="Перетащи сюда картинку или нажми, чтобы выбрать"
-      ${p.image ? `style="background-image:url('/media/images/${encodeURIComponent(p.image)}')"` : ''}>
-      ${p.image ? '' : '<span>Картинка пэда<br><small>перетащи файл сюда</small></span>'}
-    </div>
-    <p class="muted small">Звук и картинка копируются в <span class="mono">music/samples</span> и <span class="mono">music/images</span>,
-      настройки пэда — в <span class="mono">music/settings.json</span>. Всё переезжает вместе с папкой music.</p>
-    ${p.file ? `
-      <p class="muted mono">${escapeHtml(p.file)}</p>
-      <div class="row">
-        <button class="btn accent" id="p-play">▶ Прослушать</button>
-        <button class="btn" id="p-stop">■</button>
-        <span class="mono" id="p-range"></span>
-        <span class="grow"></span>
-        <button class="btn" id="p-out">−</button><button class="btn" id="p-fit">⤢</button><button class="btn" id="p-in">＋</button>
+    <div class="ed-media">
+      <div class="ed-sound">
+        <div class="row">
+          <span class="ed-file mono">${p.file ? escapeHtml(p.file) : 'Звука нет'}</span>
+          <span class="grow"></span>
+          <button class="btn" id="p-file">♪ ${p.file ? 'Заменить звук' : 'Выбрать звук'}</button>
+        </div>
+        ${p.file ? `
+          <div class="row">
+            <button class="btn accent" id="p-play">▶ Прослушать</button>
+            <button class="btn" id="p-stop" title="Стоп">■</button>
+            <span class="mono" id="p-range"></span>
+            <span class="grow"></span>
+            <button class="btn" id="p-out" title="Отдалить">−</button><button class="btn" id="p-fit" title="Весь звук">⤢</button><button class="btn" id="p-in" title="Приблизить">＋</button>
+          </div>
+          <div class="wave" id="p-wave"></div>
+          <p class="hint">Края оранжевой области — начало и конец куска. Белые ручки внутри — длина входа и затухания. Колесо мыши — зум.</p>`
+        : '<p class="muted">Перетащи mp3 на пэд в сетке или нажми «Выбрать звук».</p>'}
       </div>
-      <div class="wave" id="p-wave"></div>
-      <p class="hint">Тяни края оранжевой области — начало и конец. Белые ручки внутри — длина входа и затухания. Колесо мыши — зум.</p>
-      <div class="pad-props">
-        <label>Режим <select id="p-mode">
-          ${opt('oneshot', 'Один раз — играет кусок целиком')}
-          ${opt('loop', 'По кругу — до повторного нажатия')}
-          ${opt('hold', 'Пока держишь — отпустил, и затух')}
-        </select></label>
-        <label>Вход <input type="number" id="p-fadein" min="0" step="0.1" value="${p.fadeIn || 0}"> с
-          <select id="p-curvein">${curveOptions(p.curveIn)}</select></label>
-        <label>Затухание <input type="number" id="p-fadeout" min="0" step="0.1" value="${p.fadeOut || 0}"> с
-          <select id="p-curveout">${curveOptions(p.curveOut)}</select></label>
-        <label class="gain">Громкость пэда
-          <input type="range" id="p-gain" min="-12" max="12" step="0.5" value="${p.gain || 0}">
-          <b class="mono" id="p-gain-val"></b>
-          <button class="btn" id="p-auto" title="Подогнать к громкости отбивок">Авто</button></label>
-        <span class="muted small" id="p-loud"></span>
-      </div>`
-    : '<p class="muted">Перетащи mp3 на пэд или нажми «Выбрать звук». Картинку — так же.</p>'}
-    <div class="row"><button class="btn" id="p-save">💾 Сохранить пэд</button> <span id="p-msg"></span></div>`;
+      <div class="ed-art">
+        <div class="pad-art ${p.image ? 'has' : ''}" id="p-art" title="Перетащи сюда картинку или нажми, чтобы выбрать"
+          ${p.image ? `style="background-image:url('/media/images/${encodeURIComponent(p.image)}')"` : ''}>
+          ${p.image ? '' : '<span>Картинка<br><small>перетащи сюда</small></span>'}
+        </div>
+        <div class="row"><button class="btn" id="p-img">${p.image ? 'Заменить' : 'Выбрать'}</button>
+          ${p.image ? '<button class="btn" id="p-noimg" title="Убрать картинку">✕</button>' : ''}</div>
+      </div>
+    </div>
+    ${p.file ? `
+      <div class="modules pad-props">
+        <fieldset class="module mod-mode"><legend>Режим</legend>
+          <div class="seg-opts">
+            ${mode('oneshot', 'Один раз', 'играет кусок целиком')}
+            ${mode('loop', 'По кругу', 'до повторного нажатия')}
+            ${mode('hold', 'Пока держишь', 'отпустил — затух')}
+          </div>
+        </fieldset>
+        <fieldset class="module"><legend>Вход</legend>
+          <label><input type="number" id="p-fadein" min="0" step="0.1" value="${p.fadeIn || 0}"> с</label>
+          <select id="p-curvein">${curveOptions(p.curveIn)}</select>
+        </fieldset>
+        <fieldset class="module"><legend>Затухание</legend>
+          <label><input type="number" id="p-fadeout" min="0" step="0.1" value="${p.fadeOut || 0}"> с</label>
+          <select id="p-curveout">${curveOptions(p.curveOut)}</select>
+        </fieldset>
+        <fieldset class="module mod-gain"><legend>Громкость</legend>
+          <div class="row gain">
+            <input type="range" id="p-gain" min="-12" max="12" step="0.5" value="${p.gain || 0}">
+            <b class="mono" id="p-gain-val"></b>
+            <button class="btn" id="p-auto" title="Подогнать к громкости отбивок">Авто</button>
+          </div>
+          <span class="muted small" id="p-loud"></span>
+        </fieldset>
+      </div>` : ''}
+    <div class="ed-foot">
+      <button class="btn accent" id="p-save">💾 Сохранить пэд</button> <span id="p-msg"></span>
+      <span class="grow"></span>
+      <span class="muted small">Всё хранится в папке <span class="mono">music/</span> и переезжает вместе с ней.</span>
+    </div>`;
 
   const pick = (accept) => {
     const input = $('#p-input');
@@ -651,7 +687,7 @@ function openPad(slot) {
       pad.fadeOut = Math.max(0, Number($('#p-fadeout').value) || 0);
       pad.curveIn = $('#p-curvein').value;
       pad.curveOut = $('#p-curveout').value;
-      pad.mode = $('#p-mode').value;
+      pad.mode = $('[name=p-mode]:checked').value;
       pad.gain = Number($('#p-gain').value);
     }
     if (padRegion) {
