@@ -193,9 +193,7 @@ document.addEventListener('keydown', (e) => {
   const map = { ' ': 'jingle', Escape: 'jingleStop' };
   const key = e.key.toLowerCase();
   if (e.repeat) { if (map[e.key] || (e.key >= '1' && e.key <= '8')) e.preventDefault(); return; } // зажатая клавиша не «строчит»
-  // Пробел — отбивка, а пока она играет — стоп: новую поверх старой на деле никогда не запускают
-  if (e.key === ' ' && engine.fg?.kind === 'jingle') engine.command({ cmd: 'jingleStop' });
-  else if (map[e.key]) engine.command({ cmd: map[e.key] });
+  if (map[e.key]) engine.command({ cmd: map[e.key] });
   else if (['p', 'з'].includes(key)) engine.bgToggle();
   else if (['s', 'ы'].includes(key)) engine.bgStop();
   else if (['n', 'т'].includes(key)) engine.command({ cmd: 'bgNext' });

@@ -529,7 +529,12 @@ main { padding: 20px; }
 
 /* ===== Разметка отбивок ===== */
 .editor { display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 18px; align-items: start; }
-.list { margin-top: 12px; max-height: 72vh; overflow: hidden auto; display: grid; gap: 2px; }
+.list { margin-top: 12px; max-height: 72vh; overflow: hidden auto; overscroll-behavior: contain; display: grid; gap: 2px; align-content: start; }
+/* Колонка со списком целиком влезает в экран и стоит на месте: прокрутка списка не утаскивает страницу */
+@media (min-width: 801px) {
+  .editor > .card:first-child { position: sticky; top: 75px; max-height: calc(100vh - 95px); display: flex; flex-direction: column; }
+  .editor > .card:first-child .list { flex: 1; min-height: 120px; max-height: none; }
+}
 .list span:first-child { min-width: 0; overflow-wrap: anywhere; }
 .list div { padding: 8px 10px; cursor: pointer; border-radius: 6px; display: flex; justify-content: space-between; gap: 8px; font-size: 14px; }
 .list div:hover { background: rgba(255, 255, 255, .04); }

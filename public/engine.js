@@ -545,7 +545,8 @@ export class Engine {
       case 'bgPause': return this.bgPause();
       case 'bgStop': return this.bgStop();
       case 'bgToggle': return this.bgToggle();
-      case 'jingle': return this.jingle();
+      // Отбивка — переключатель: пока играет, та же кнопка/клавиша/пэд её гасит
+      case 'jingle': return this.fg?.kind === 'jingle' ? this.stopJingle() : this.jingle();
       case 'jingleStop': return this.stopJingle();
       case 'jingleTag': this.jingleTag = msg.tag || null; return this.emit();
       case 'bgNext': return this.bg.state === 'playing' && this.bgNext();
