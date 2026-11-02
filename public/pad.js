@@ -1,3 +1,5 @@
+import { bgSourceLabel } from '/engine.js';
+
 // Панель эфира: раздел «Игра» (отбивка + пэды), «Фон» и «Уровни» (крутилки громкости).
 // Одна и та же на ноутбуке (колонками) и на телефоне (вкладками).
 // send(msg) — что делать при нажатии; возвращает функцию для показа статуса.
@@ -18,6 +20,19 @@ export function renderPad(root, settings, send, { tabs = false, master = false, 
   const jtags = settings.showJingleTags && settings.jingleTags.length
     ? `<div class="jtags">${['', ...settings.jingleTags].map((t) =>
         `<button class="jtag" data-jtag="${escapeHtml(t)}">#${t ? escapeHtml(t) : 'случайные'}</button>`).join('')}</div>`
+    : '';
+
+  // Откуда играет фон: все треки, закладки, тег или плейлист (настраивается во вкладке «Фон»)
+  const lib = settings.bgLibrary || { tags: [], bookmarks: [], playlists: [] };
+  const sources = [
+    { type: 'all' },
+    ...(lib.bookmarks.length ? [{ type: 'bookmarks' }] : []),
+    ...lib.tags.map((name) => ({ type: 'tag', name })),
+    ...lib.playlists.map((p) => ({ type: 'playlist', name: p.name })),
+  ];
+  const bgSources = sources.length > 1
+    ? `<div class="jtags bgsrc">${sources.map((src) =>
+        `<button class="jtag" data-bgsrc='${escapeHtml(JSON.stringify(src))}'>${escapeHtml(bgSourceLabel(src))}</button>`).join('')}</div>`
     : '';
 
   root.innerHTML = `
@@ -42,6 +57,7 @@ export function renderPad(root, settings, send, { tabs = false, master = false, 
       <div class="side">
       <section class="deck bg" data-sec="bg" ${tabs ? 'hidden' : ''}>
         <h3>Фон</h3>
+        ${bgSources}
         <div class="vinyl-wrap">
           <div class="vinyl" id="vinyl">
             <div class="record"><div class="grooves"></div><div class="label"><div class="hole"></div></div></div>
@@ -49,6 +65,7 @@ export function renderPad(root, settings, send, { tabs = false, master = false, 
           </div>
           <div class="now">
             <div class="track" id="bg-track">—</div>
+            <div class="bg-place" id="bg-place"></div>
             <div class="progress"><b class="bar" id="bg-bar"></b></div>
             <div class="times"><span id="bg-pos">0:00</span><span id="bg-left">-0:00</span></div>
           </div>
@@ -99,6 +116,9 @@ export function renderPad(root, settings, send, { tabs = false, master = false, 
   root.querySelectorAll('[data-jtag]').forEach((b) =>
     b.addEventListener('click', () => send({ type: 'cmd', cmd: 'jingleTag', tag: b.dataset.jtag })),
   );
+  root.querySelectorAll('[data-bgsrc]').forEach((b) =>
+    b.addEventListener('click', () => send({ type: 'cmd', cmd: 'bgSource', source: JSON.parse(b.dataset.bgsrc) })),
+  );
   root.querySelectorAll('.seg button').forEach((b) =>
     b.addEventListener('click', () => {
       root.querySelectorAll('.seg button').forEach((x) => x.classList.toggle('active', x === b));
@@ -133,6 +153,13 @@ export function renderPad(root, settings, send, { tabs = false, master = false, 
     $('#vinyl').classList.toggle('spin', playing);
     $('#vinyl').classList.toggle('loaded', st.bg !== 'stopped');
     $('#bg-track').textContent = st.bgTrack ? trackTitle(st.bgTrack) : 'Фон остановлен';
+    const src = st.bgSource || { type: 'all' };
+    root.querySelectorAll('[data-bgsrc]').forEach((b) => {
+      const s = JSON.parse(b.dataset.bgsrc);
+      b.classList.toggle('active', s.type === src.type && (s.name || '') === (src.name || ''));
+    });
+    $('#bg-place').textContent = st.bgPlace ? `${bgSourceLabel(src)} · ${st.bgPlace.i} / ${st.bgPlace.n}`
+      : src.type !== 'all' ? bgSourceLabel(src) : '';
     animateBar($('#bg-bar'), st.bgPos, st.bgDur, playing);
     clearInterval(bgClock);
     const t0 = performance.now();
@@ -351,7 +378,8 @@ const fmt = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(
 const trackTitle = (f) => f.replace(/\.[^.]+$/, '').replace(/_/g, ' ');
 
 // Что из настроек видно на пульте: при изменении пульт перерисовывается
-export const padKey = (s) => JSON.stringify([s.banks, s.jingleTags, s.showJingleTags]);
+export const padKey = (s) => JSON.stringify([s.banks, s.jingleTags, s.showJingleTags,
+  s.bgLibrary?.tags, s.bgLibrary?.playlists.map((p) => p.name), !!s.bgLibrary?.bookmarks.length]);
 
 // Текстуры оформления из public/textures (если их туда положили): aluminum.jpg -> класс tex-aluminum на body
 export async function applyTextures() {

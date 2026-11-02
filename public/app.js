@@ -1,6 +1,6 @@
 import WaveSurfer from '/vendor/wavesurfer/wavesurfer.esm.js';
 import RegionsPlugin from '/vendor/wavesurfer/plugins/regions.esm.js';
-import { Engine, Rotation, cueOf } from '/engine.js';
+import { Engine, Rotation, cueOf, bgPool, bgSourceLabel } from '/engine.js';
 import { renderPad, connect, escapeHtml, padKey, applyTextures, padName } from '/pad.js';
 import { CURVES, fitFades, loudness, dbToGain } from '/envelope.js';
 import { attachEnvelope, previewer } from '/wave-envelope.js';
@@ -12,7 +12,7 @@ const api = async (url, body) =>
   (await fetch(url, body ? { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {})).json();
 const fmt = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`;
 // Имя трека без расширения: в списках и заголовках .mp3 только мешает
-const trackName = (f) => f.replace(/\.[^.]+$/, '');
+const trackName = (f) => f.replace(/\.[^.]+$/, '').replace(/_/g, ' ');
 const AUDIO_RE = /\.(mp3|wav|ogg|m4a|aac|flac)$/i;
 const IMAGE_RE = /\.(png|jpe?g|webp|gif|avif)$/i;
 // Эталон для «Авто-громкости» пэда: средняя громкость дропов в отбивках, dBFS (см. loudness в envelope.js)
@@ -31,6 +31,8 @@ document.querySelectorAll('nav button[data-tab]').forEach((b) =>
     document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('active', x === b));
     document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('active', t.id === 'tab-' + activeTab));
     if (activeTab !== 'jingles') jw?.ws.pause();
+    if (activeTab !== 'background') bw?.ws.pause();
+    if (activeTab === 'background') loadBgList();
     if (activeTab !== 'pads') pw?.ws.pause();
     if (activeTab === 'jingles') { $('#j-show-tags').checked = !!settings.showJingleTags; loadJingleList(); }
     if (activeTab === 'pads') renderPadGrid();
@@ -99,7 +101,7 @@ function mountPad() {
 }
 
 $('#go-live').addEventListener('click', async () => {
-  engine = new Engine(() => settings, (st) => { showStatus?.(st); send?.(st); mixer.refresh(); }, saveSettings);
+  engine = new Engine(() => settings, (st) => { showStatus?.(st); send?.(st); mixer.refresh(); bgStatus(st); }, saveSettings);
   send = connect('player', (msg) => {
     if (msg.type === 'connected') engine.emit(); // отдать пультам текущее состояние
     if (msg.type === 'replaced') return goOffline();
@@ -173,6 +175,10 @@ function padByKey(key) {
 document.addEventListener('keydown', (e) => {
   if (e.target.matches('input, select, textarea') || document.querySelector('dialog[open]')) return;
   if (activeTab === 'jingles') return editorKeys(e);
+  if (activeTab === 'background') {
+    if (e.key === ' ' && bw) { e.preventDefault(); bw.ws.playPause(); }
+    return;
+  }
   if (activeTab !== 'live' || !engine) return;
   const map = { ' ': 'jingle', Escape: 'jingleStop' };
   const key = e.key.toLowerCase();
@@ -197,6 +203,240 @@ document.addEventListener('keyup', (e) => {
   const slot = padByKey(e.key);
   if (slot !== undefined) engine.padUp(slot);
 });
+
+// ---------- Фон: библиотека фоновой музыки ----------
+// Теги, закладки и плейлисты живут в settings.bgLibrary (music/settings.json, переезжают вместе с music/).
+// Разметки у фона нет: трек играет целиком, здесь его можно только послушать и разложить по группам.
+let bw, bOpen = null, bgTracks = [];
+let bFilter = { type: 'all' }; // что показано в списке: all | bookmarks | tag | untagged | playlist
+let onAirBg = null, onAirSrc = null; // что сейчас играет фоном в эфире
+const lib = () => settings.bgLibrary;
+const sameSrc = (a, b) => a.type === b.type && (a.name || '') === (b.name || '');
+const tagsOf = (t) => lib().trackTags[t] || [];
+
+async function saveLib() {
+  settings = await api('/api/settings', { bgLibrary: lib() });
+  renderBgLibrary();
+}
+
+async function loadBgList() {
+  ({ background: bgTracks } = await api('/api/library'));
+  renderBgLibrary();
+}
+$('#b-reload').addEventListener('click', loadBgList);
+
+function shownTracks() {
+  if (bFilter.type === 'untagged') return bgTracks.filter((t) => !tagsOf(t).length);
+  const have = new Set(bgTracks);
+  const pool = bgPool(lib(), bFilter);
+  return pool ? pool.filter((t) => have.has(t)) : bgTracks;
+}
+
+// Группы слева: фильтры (все, закладки, теги, без тега) и плейлисты. На тег и плейлист можно бросить трек.
+function renderBgLibrary() {
+  const L = lib();
+  if ((bFilter.type === 'tag' && !L.tags.includes(bFilter.name)) ||
+      (bFilter.type === 'playlist' && !L.playlists.some((p) => p.name === bFilter.name))) bFilter = { type: 'all' };
+  const count = (f) => (f.type === 'untagged' ? bgTracks.filter((t) => !tagsOf(t).length) : bgPool(L, f) || bgTracks).length;
+  const chip = (f, label, removable) => `<button class="tag ${sameSrc(f, bFilter) ? 'active' : ''}" data-f='${escapeHtml(JSON.stringify(f))}'>
+      ${label}<small>${count(f)}</small>${removable ? '<i data-del title="Удалить">×</i>' : ''}</button>`;
+  $('#b-filters').innerHTML = chip({ type: 'all' }, 'Все') + chip({ type: 'bookmarks' }, '★ Закладки') +
+    L.tags.map((name) => chip({ type: 'tag', name }, '#' + escapeHtml(name), true)).join('') +
+    chip({ type: 'untagged' }, 'Без тега') +
+    '<button class="tag add" id="b-tag-add" title="Новый тег">＋ тег</button>';
+  $('#b-playlists').innerHTML = L.playlists.map((p) => chip({ type: 'playlist', name: p.name }, '▤ ' + escapeHtml(p.name), true)).join('') +
+    '<button class="tag add" id="b-pl-add" title="Новый плейлист">＋ плейлист</button>';
+  document.querySelectorAll('#b-filters [data-f], #b-playlists [data-f]').forEach((el) => {
+    const f = JSON.parse(el.dataset.f);
+    el.onclick = (e) => {
+      if (e.target.matches('[data-del]')) return deleteBgGroup(f);
+      bFilter = f;
+      renderBgLibrary();
+    };
+    if (!['tag', 'playlist', 'bookmarks'].includes(f.type)) return;
+    el.ondragover = (e) => { e.preventDefault(); el.classList.add('drop'); };
+    el.ondragleave = () => el.classList.remove('drop');
+    el.ondrop = (e) => {
+      e.preventDefault();
+      el.classList.remove('drop');
+      const t = e.dataTransfer.getData('text/bg');
+      if (t && !inGroup(f, t)) toggleIn(f, t);
+    };
+  });
+  $('#b-tag-add').onclick = () => newBgGroup('tag');
+  $('#b-pl-add').onclick = () => newBgGroup('playlist');
+  renderBgSource();
+  renderBgList();
+  renderBgTrackGroups();
+}
+
+const inGroup = (f, t) => (bgPool(lib(), f) || []).includes(t);
+
+// Добавить трек в тег / закладки / плейлист или убрать оттуда
+function toggleIn(f, t) {
+  const L = lib();
+  const on = !inGroup(f, t);
+  if (f.type === 'tag') {
+    L.trackTags[t] = on ? [...tagsOf(t), f.name] : tagsOf(t).filter((x) => x !== f.name);
+    if (!L.trackTags[t].length) delete L.trackTags[t];
+  }
+  if (f.type === 'bookmarks') L.bookmarks = on ? [...L.bookmarks, t] : L.bookmarks.filter((x) => x !== t);
+  if (f.type === 'playlist') {
+    const p = L.playlists.find((x) => x.name === f.name);
+    p.tracks = on ? [...p.tracks, t] : p.tracks.filter((x) => x !== t);
+  }
+  return saveLib();
+}
+
+function moveInPlaylist(t, d) {
+  const p = lib().playlists.find((x) => x.name === bFilter.name);
+  const i = p.tracks.indexOf(t), j = i + d;
+  if (i < 0 || j < 0 || j >= p.tracks.length) return;
+  [p.tracks[i], p.tracks[j]] = [p.tracks[j], p.tracks[i]];
+  return saveLib();
+}
+
+async function newBgGroup(kind) {
+  const L = lib();
+  const ask = kind === 'tag' ? 'Название тега (например: спокойное, разминка, перерыв)' : 'Название плейлиста';
+  const name = (prompt(ask) || '').trim().replace(/^#/, '').slice(0, 24);
+  if (!name) return;
+  if (kind === 'tag') {
+    if (L.tags.includes(name)) return;
+    L.tags.push(name);
+  } else {
+    if (L.playlists.some((p) => p.name === name)) return;
+    L.playlists.push({ name, tracks: [] });
+  }
+  bFilter = { type: kind, name };
+  await saveLib();
+}
+
+// Удаление тега или плейлиста; треки остаются в папке. Если фон играл отсюда — дальше играют все.
+async function deleteBgGroup(f) {
+  const L = lib();
+  if (!confirm(`Удалить ${f.type === 'tag' ? `тег #${f.name}` : `плейлист «${f.name}»`}? Сами треки останутся в папке.`)) return;
+  if (f.type === 'tag') {
+    L.tags = L.tags.filter((x) => x !== f.name);
+    for (const t in L.trackTags) {
+      L.trackTags[t] = L.trackTags[t].filter((x) => x !== f.name);
+      if (!L.trackTags[t].length) delete L.trackTags[t];
+    }
+  } else L.playlists = L.playlists.filter((p) => p.name !== f.name);
+  const patch = { bgLibrary: L };
+  if (sameSrc(settings.bgSource, f)) patch.bgSource = { type: 'all' };
+  settings = await api('/api/settings', patch);
+  renderBgLibrary();
+}
+
+// Откуда сейчас играет фон в эфире + кнопка «играть отсюда» для открытого списка
+function renderBgSource() {
+  const cur = settings.bgSource || { type: 'all' };
+  const f = bFilter;
+  $('#b-source').innerHTML = `<div class="b-source">
+      <span class="small">Фон в эфире: <b>${escapeHtml(bgSourceLabel(cur))}</b>
+        <span class="muted">${cur.type === 'playlist' ? 'по порядку' : 'вперемешку, без повторов'}</span></span>
+      ${f.type !== 'untagged' && !sameSrc(f, cur) ? `<button class="btn" id="b-use">▶ Играть ${escapeHtml(bgSourceLabel(f))}</button>` : ''}
+    </div>`;
+  if ($('#b-use')) $('#b-use').onclick = async () => {
+    if (engine) engine.setBgSource(f);
+    else settings = await api('/api/settings', { bgSource: f });
+    renderBgSource();
+  };
+}
+
+function renderBgList() {
+  const list = shownTracks();
+  const pl = bFilter.type === 'playlist';
+  const L = lib();
+  const empty = { bookmarks: 'Закладок нет. Нажми ★ у трека.', playlist: 'Плейлист пуст. Перетащи сюда треки или отметь плейлист справа.',
+    tag: 'В этом теге пусто. Перетащи треки на тег.' }[bFilter.type] || (bgTracks.length ? 'Пусто.' : 'Папка пуста — закинь треки в music/background');
+  $('#b-list').innerHTML = list.length
+    ? list.map((t, i) => `
+      <div data-name="${escapeHtml(t)}" draggable="true" class="b-row ${t === bOpen ? 'active' : ''} ${t === onAirBg ? 'onair' : ''}">
+        ${pl ? `<span class="b-num mono">${i + 1}</span>` : ''}
+        <button class="star ${L.bookmarks.includes(t) ? 'on' : ''}" data-star title="Закладка">★</button>
+        <span class="b-name">${escapeHtml(trackName(t))}</span>
+        ${pl ? '<span class="b-acts"><button data-up title="Выше">↑</button><button data-down title="Ниже">↓</button><button data-out title="Убрать из плейлиста">✕</button></span>' : ''}
+      </div>`).join('')
+    : `<div class="muted">${empty}</div>`;
+  $('#b-list').querySelectorAll('[data-name]').forEach((el) => {
+    const t = el.dataset.name;
+    el.onclick = (e) => {
+      if (e.target.closest('[data-star]')) return toggleIn({ type: 'bookmarks' }, t);
+      if (e.target.closest('[data-out]')) return toggleIn(bFilter, t);
+      if (e.target.closest('[data-up]')) return moveInPlaylist(t, -1);
+      if (e.target.closest('[data-down]')) return moveInPlaylist(t, 1);
+      openBgTrack(t);
+    };
+    el.ondragstart = (e) => e.dataTransfer.setData('text/bg', t);
+  });
+}
+
+function openBgTrack(name) {
+  bOpen = name;
+  bw?.ws.destroy();
+  $('#b-editor').innerHTML = `
+    <div class="ed-head">
+      <h2>${escapeHtml(trackName(name))}</h2>
+      <button class="btn star-btn" id="b-star"></button>
+      <button class="btn accent" id="b-air" title="Поставить этот трек фоном прямо сейчас">▶ В эфир</button>
+    </div>
+    <div class="row b-groups"><span class="muted small">Теги</span><div class="tagbar" id="b-tags"></div></div>
+    <div class="row b-groups"><span class="muted small">Плейлисты</span><div class="tagbar" id="b-pls"></div></div>
+    <div class="row">
+      <button class="btn" id="b-play" title="Пробел">▶ / ❚❚</button>
+      <span id="b-time" class="mono">0:00.0</span>
+      <span class="grow"></span>
+      <button class="btn" id="b-out" title="Отдалить">−</button>
+      <button class="btn" id="b-fit" title="Весь трек">⤢</button>
+      <button class="btn" id="b-in" title="Приблизить">＋</button>
+    </div>
+    <div class="wave" id="b-wave"></div>
+    <p class="hint">Клик по волне — перемотка, колесо мыши — зум, пробел — play/pause.
+      Прослушка звучит из колонок ноутбука мимо микшера — во время мероприятия слушай в наушниках.</p>`;
+  bw = createWave($('#b-wave'), '/media/background/' + encodeURIComponent(name), RegionsPlugin.create());
+  const time = () => ($('#b-time').textContent = `${fmt(bw.ws.getCurrentTime())} / ${fmt(bw.ws.getDuration() || 0)}`);
+  bw.ws.on('timeupdate', time);
+  bw.ws.on('decode', time);
+  $('#b-play').onclick = () => bw.ws.playPause();
+  $('#b-in').onclick = bw.zoomIn;
+  $('#b-out').onclick = bw.zoomOut;
+  $('#b-fit').onclick = bw.fit;
+  $('#b-air').onclick = () => {
+    if (!engine) return alert('Сначала начни эфир во вкладке «Эфир».');
+    bw.ws.pause();
+    engine.bgPlayTrack(name);
+  };
+  renderBgTrackGroups();
+  renderBgList();
+}
+
+// Справа: закладка, теги и плейлисты открытого трека — клик добавляет или убирает
+function renderBgTrackGroups() {
+  const t = bOpen;
+  if (!t || !$('#b-tags')) return;
+  const L = lib();
+  const marked = L.bookmarks.includes(t);
+  $('#b-star').textContent = marked ? '★ В закладках' : '☆ В закладки';
+  $('#b-star').classList.toggle('on', marked);
+  $('#b-star').onclick = () => toggleIn({ type: 'bookmarks' }, t);
+  const chips = (groups, empty) => (groups.length
+    ? groups.map((f) => `<button class="tag ${inGroup(f, t) ? 'active' : ''}" data-g='${escapeHtml(JSON.stringify(f))}'>${escapeHtml(bgSourceLabel(f))}</button>`).join('')
+    : `<span class="muted small">${empty}</span>`);
+  $('#b-tags').innerHTML = chips(L.tags.map((name) => ({ type: 'tag', name })), 'Тегов пока нет — создай их кнопкой «＋ тег» слева.');
+  $('#b-pls').innerHTML = chips(L.playlists.map((p) => ({ type: 'playlist', name: p.name })), 'Плейлистов пока нет — «＋ плейлист» слева.');
+  $('#b-editor').querySelectorAll('[data-g]').forEach((b) => (b.onclick = () => toggleIn(JSON.parse(b.dataset.g), t)));
+}
+
+// Статус эфира: подсветить играющий трек и источник, если вкладка «Фон» открыта
+function bgStatus(st) {
+  const src = JSON.stringify(st.bgSource);
+  if (st.bgTrack === onAirBg && src === onAirSrc) return;
+  onAirBg = st.bgTrack;
+  onAirSrc = src;
+  if (activeTab === 'background') { renderBgSource(); renderBgList(); }
+}
 
 // ---------- Разметка отбивок ----------
 let jw, regions, current, cues = [], dirty = false;

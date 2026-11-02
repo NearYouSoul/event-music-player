@@ -46,7 +46,7 @@ const defaultStrip = (id) => ({
     ],
   },
   comp: { on: false, threshold: -18, ratio: 3, knee: 6, attack: 0.01, release: 0.25, makeup: 0 },
-  ...(id === 'master' ? { limiter: { on: true, ceiling: -1 } } : {}),
+  ...(id === 'master' ? { limiter: { on: true, ceiling: -1, input: 0, release: 0.08 } } : {}),
 });
 const MIXER_IDS = ['bg', 'jingles', 'pads', 'master'];
 
@@ -64,6 +64,10 @@ const DEFAULT_SETTINGS = {
   padVolume: 1,
   jingleTags: [],     // разделы отбивок: «хаус», «рок»…
   showJingleTags: false, // показывать переключатель разделов под кнопкой «Отбивка»
+  // Фоновая музыка: теги (trackTags: трек -> [теги]), закладки и плейлисты (треки по порядку)
+  bgLibrary: { tags: [], trackTags: {}, bookmarks: [], playlists: [] },
+  bgSource: { type: 'all' }, // что играет фоном: all | tag | bookmarks | playlist (+ name)
+  bgPlaylistPos: {},         // плейлист -> последний начатый трек: после Stop продолжаем со следующего
   mixer: Object.fromEntries(MIXER_IDS.map((id) => [id, defaultStrip(id)])),
   midi: {},           // назначения MIDI: действие -> { type: 'note'|'cc', channel, number }
 };
@@ -91,7 +95,8 @@ function loadSettings() {
     return [id, { ...def, ...m, eq: { ...def.eq, ...m.eq }, comp: { ...def.comp, ...m.comp }, ...(def.limiter ? { limiter: { ...def.limiter, ...m.limiter } } : {}) }];
   }));
   const activeBank = Math.min(Math.max(0, saved.activeBank | 0), banks.length - 1);
-  return { ...DEFAULT_SETTINGS, ...saved, banks, activeBank, mixer };
+  const bgLibrary = { ...DEFAULT_SETTINGS.bgLibrary, ...saved.bgLibrary };
+  return { ...DEFAULT_SETTINGS, ...saved, banks, activeBank, mixer, bgLibrary };
 }
 
 // Через временный файл, как и разметку: сбой посреди записи не обнулит пэды и микшер

@@ -559,6 +559,32 @@ main { padding: 20px; }
 #j-editor .ed-head h2 { flex: 1; margin: 0; }
 .ed-foot { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-top: 14px; margin-top: 4px; border-top: 1px solid rgba(255, 255, 255, .05); }
 
+/* ===== Фон: библиотека ===== */
+.b-pl-head { margin-top: 4px; }
+.b-source { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; justify-content: space-between; margin: 4px 0 2px; padding: 8px 10px; border-radius: 6px; background: #0f1216; box-shadow: inset 0 0 0 1px var(--steel-700); }
+.b-source b { color: var(--cobalt); }
+.b-source .btn { padding: 5px 12px; font-size: 13px; }
+.list .b-row { justify-content: flex-start; align-items: center; }
+.b-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.b-num { width: 22px; color: var(--muted); font-size: 12px; }
+.star, .b-acts button { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 15px; padding: 0 2px; }
+.star { color: var(--steel-600); }
+.star.on { color: var(--amber); text-shadow: 0 0 8px rgba(255, 176, 32, .5); }
+.star:hover, .b-acts button:hover { color: var(--ink); }
+.b-acts { display: flex; gap: 2px; }
+.b-acts button { font-size: 13px; }
+.list .b-row.onair { color: var(--cobalt); box-shadow: inset 2px 0 0 var(--cobalt); }
+.list .b-row.onair .b-name::after { content: ' ♪'; }
+.list .b-row.active { background: rgba(77, 168, 255, .1); color: var(--ink); box-shadow: inset 2px 0 0 var(--cobalt); }
+#tab-background .tag.active { color: var(--cobalt); box-shadow: inset 0 0 0 1px rgba(77, 168, 255, .6); background: rgba(77, 168, 255, .08); }
+#b-editor .ed-head h2 { flex: 1; margin: 0; }
+.star-btn.on { color: var(--amber); }
+.b-groups > .muted { width: 72px; }
+.b-groups .tagbar { margin: 4px 0; }
+.bg-place { margin: -6px 0 10px; font-size: 13px; color: var(--cobalt); }
+.bgsrc { margin: -4px 0 14px; }
+.bgsrc .jtag.active { color: var(--cobalt); box-shadow: inset 0 0 0 1px rgba(77, 168, 255, .6); background: rgba(77, 168, 255, .08); }
+
 /* ===== Пэды: редактор ===== */
 .pads-setup { display: grid; gap: 18px; }
 .pads-setup h3 { margin: 0; }
@@ -768,7 +794,6 @@ dialog.popup {
   width: max-content;
 }
 dialog.popup::backdrop { background: rgba(6, 8, 10, .7); backdrop-filter: blur(4px); }
-dialog.plugin { border-top: 3px solid var(--amber); }
 .popup-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
 .popup-head h3 { color: var(--ink); font-size: 17px; }
 .remote-grid { display: grid; grid-template-columns: 260px 320px; gap: 20px; align-items: start; }
@@ -778,22 +803,148 @@ dialog.plugin { border-top: 3px solid var(--amber); }
 .power span::after { content: ''; position: absolute; left: 3px; top: 3px; width: 16px; height: 16px; border-radius: 3px; background: linear-gradient(180deg, #4a525d, #2a3038); box-shadow: 0 1px 0 #000; transition: transform .15s, background .15s; }
 .power input:checked + span { background: rgba(54, 224, 122, .25); }
 .power input:checked + span::after { transform: translateX(16px); background: var(--led); box-shadow: 0 0 8px var(--led); }
-.eq-canvas { width: min(900px, 86vw); aspect-ratio: 900 / 320; background: #0b0e11; border-radius: 8px; display: block; cursor: crosshair; touch-action: none; box-shadow: inset 0 1px 6px rgba(0, 0, 0, .8); }
-.bands { display: grid; gap: 6px; }
-.band { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
-.band .check { margin: 0; min-width: 44px; }
-.band select { padding: 5px 8px; width: 130px; }
-.band input[type=number] { width: 84px; padding: 5px 8px; }
-.band input:disabled { opacity: .35; }
-.comp { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
-.comp-canvas { width: 260px; height: 260px; background: #0b0e11; border-radius: 8px; box-shadow: inset 0 1px 6px rgba(0, 0, 0, .8); }
-.params { display: grid; gap: 10px; min-width: 360px; }
-.param { display: grid; grid-template-columns: 170px 1fr 60px 30px; gap: 10px; align-items: center; color: var(--muted); font-size: 14px; }
-.param b { color: var(--ink); text-align: right; }
-.gr-meter { display: grid; grid-template-columns: 170px 1fr 60px; gap: 10px; align-items: center; color: var(--muted); font-size: 14px; margin-top: 6px; }
-.gr-meter div { height: 8px; border-radius: 2px; background: #0b0e11; overflow: hidden; }
-.gr-meter div b { display: block; height: 100%; width: 0; background: var(--amber); }
-.gr-meter > b { color: var(--ink); text-align: right; }
+
+/* ===== Окна плагинов: каждый — свой прибор =====
+   Эквалайзер — современный тёмный экран, компрессор — синяя ламповая панель, лимитер — светлая мастеринговая. */
+dialog.plugin { padding: 0; border: 0; background: none; color: var(--ink); max-width: 96vw; max-height: 96vh; overflow: visible; }
+dialog.plugin::backdrop { background: rgba(6, 8, 10, .72); backdrop-filter: blur(4px); }
+.dev { position: relative; border-radius: 12px; }
+.btn.mini { padding: 5px 10px; font-size: 13px; }
+
+/* Эквалайзер */
+.eqdev { width: min(1100px, 94vw); overflow: hidden; background: linear-gradient(180deg, #23272f, #181b21); border: 1px solid #0b0d10; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .06), 0 30px 80px rgba(0, 0, 0, .7); }
+.dev-bar { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-bottom: 1px solid #0b0d10; background: linear-gradient(180deg, #2a2f38, #20242b); }
+.dev-title { font-family: var(--display); font-weight: 800; font-size: 14px; text-transform: uppercase; letter-spacing: .04em; }
+.dev-ch { color: var(--muted); font-weight: 600; }
+.seg-mini { display: flex; padding: 2px; border-radius: 6px; background: #0b0e11; box-shadow: inset 0 1px 3px rgba(0, 0, 0, .8); }
+.seg-mini button { border: 0; background: none; color: var(--muted); font-size: 12px; font-weight: 600; padding: 4px 10px; border-radius: 4px; cursor: pointer; }
+.seg-mini button.active { color: var(--ink); background: #2e343e; }
+.eq-stage { position: relative; height: min(470px, 58vh); background: radial-gradient(120% 100% at 50% 0%, #1d2129, #0f1115); }
+.eq-cv { display: block; width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+.eq-tip { position: absolute; pointer-events: none; padding: 4px 8px; border-radius: 5px; background: rgba(11, 13, 16, .92); box-shadow: 0 0 0 1px rgba(255, 255, 255, .08); font-size: 12px; white-space: nowrap; }
+/* панель выбранной полосы — плавает под её точкой */
+.eq-panel {
+  --band: #fff;
+  position: absolute;
+  bottom: 30px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  background: rgba(24, 27, 33, .94);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, .07), inset 0 2px 0 var(--band), 0 14px 40px rgba(0, 0, 0, .6);
+}
+.eqp-power { width: 30px; height: 30px; flex: none; border-radius: 50%; border: 0; cursor: pointer; font-weight: 700; color: var(--muted); background: #2e343e; }
+.eqp-power.on { color: #0b0d10; background: var(--band); box-shadow: 0 0 12px var(--band); }
+.eqp-sel { display: grid; gap: 6px; }
+.eqp-sel select { padding: 4px 8px; font-size: 12px; }
+.eqp-close { align-self: flex-start; border: 0; background: none; color: var(--muted); cursor: pointer; }
+.eqp-close:hover { color: var(--ink); }
+.dev-foot { display: flex; align-items: center; gap: 16px; padding: 6px 14px; border-top: 1px solid #0b0d10; }
+.dev-foot > span { flex: 1; }
+
+/* Крутилки плагинов. --size — диаметр шкалы; svg шире, чтобы поместились подписи вокруг */
+.pk { --size: 60px; display: flex; flex-direction: column; align-items: center; gap: 1px; user-select: none; }
+.pk-body { position: relative; width: calc(var(--size) * 1.48); height: calc(var(--size) * 1.48); cursor: ns-resize; touch-action: none; }
+.pk-body svg { position: absolute; inset: 0; overflow: visible; }
+.pk-cap { position: absolute; inset: 27%; border-radius: 50%; }
+.pk-cap i { position: absolute; left: 50%; top: 6%; width: 3px; height: 30%; margin-left: -1.5px; border-radius: 2px; }
+.pk-track, .pk-fill { fill: none; stroke-width: 5; stroke-linecap: round; }
+.pk-tick { stroke-width: 1.5; }
+.pk text { font: 600 11px var(--font); text-anchor: middle; }
+.pk-val { font-family: var(--mono); font-size: 12px; white-space: nowrap; }
+.pk-name { font-size: 12px; font-weight: 700; white-space: nowrap; }
+.pk.off { opacity: .3; }
+.pk.off .pk-body { cursor: not-allowed; }
+/* тёмная — на экране эквалайзера, цветная дуга — цвет полосы */
+.pk.dark .pk-body { margin: calc(var(--size) * -.2) 0 calc(var(--size) * -.24); }
+.pk.dark .pk-cap { background: radial-gradient(circle at 40% 30%, #4a525d, #1f242b 70%); box-shadow: 0 3px 8px rgba(0, 0, 0, .6), inset 0 1px 0 rgba(255, 255, 255, .15); }
+.pk.dark .pk-cap i { background: var(--ink); }
+.pk.dark .pk-track { stroke: #0b0e11; }
+.pk.dark .pk-fill { stroke: var(--band, var(--amber)); filter: drop-shadow(0 0 3px var(--band, var(--amber))); }
+.pk.dark .pk-tick { stroke: rgba(255, 255, 255, .1); }
+.pk.dark .pk-name { color: var(--muted); font-size: 11px; }
+/* чёрная рифлёная — на синей панели компрессора */
+.pk.black .pk-track, .pk.black .pk-fill, .pk.silver .pk-track, .pk.silver .pk-fill { display: none; }
+.pk.black .pk-cap { inset: 21%; background: radial-gradient(circle at 38% 30%, #474c55, #121418 60%); box-shadow: 0 0 0 4px #0e1013, 0 7px 12px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255, 255, 255, .22); }
+.pk.black .pk-cap::before { content: ''; position: absolute; inset: -4px; border-radius: 50%; z-index: -1; background: repeating-conic-gradient(#202329 0 2deg, #111317 2deg 4deg); }
+.pk.black .pk-cap i { top: 3%; width: 4px; height: 36%; margin-left: -2px; background: #fff; }
+.pk.black .pk-tick { stroke: rgba(255, 255, 255, .85); }
+.pk.black text { fill: #e8eefc; }
+.pk.black .pk-name { color: #fff; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+.pk.black .pk-val { color: rgba(232, 238, 252, .7); }
+/* серебряная точёная — на светлой панели лимитера; значение — над ручкой */
+.pk.silver .pk-cap { inset: 23%; background: repeating-radial-gradient(circle at 50% 50%, rgba(255, 255, 255, .0) 0 2px, rgba(0, 0, 0, .04) 2px 3px), radial-gradient(circle at 35% 28%, #fff, #dde1e5 35%, #a4abb3 75%, #858c95); box-shadow: 0 9px 16px rgba(0, 0, 0, .35), 0 0 0 1px rgba(0, 0, 0, .2), inset 0 -2px 4px rgba(0, 0, 0, .2); }
+.pk.silver .pk-cap i { top: 12%; width: 8px; height: 8px; margin-left: -4px; border-radius: 50%; background: #2a2f36; box-shadow: inset 0 1px 2px #000; }
+.pk.silver .pk-tick { stroke: #3a414c; }
+.pk.silver text { fill: #4a525d; }
+.pk.silver .pk-val { order: -1; font: 700 15px var(--font); color: #1b1f25; }
+.pk.silver .pk-name { color: #2a2f36; font-size: 11px; text-transform: uppercase; letter-spacing: .08em; }
+
+/* Общие детали «железа» */
+.hw { padding: 28px 34px; border-radius: 8px; }
+.scr { position: absolute; width: 13px; height: 13px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #f2f4f6, #8c949e 70%); box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .35), 0 1px 0 rgba(255, 255, 255, .3); }
+.scr::after { content: ''; position: absolute; left: 2px; right: 2px; top: 5.5px; height: 2px; background: #5d6672; transform: rotate(35deg); }
+.scr.tl { top: 10px; left: 10px; } .scr.tr { top: 10px; right: 10px; } .scr.bl { bottom: 10px; left: 10px; } .scr.br { bottom: 10px; right: 10px; }
+.hw-x { position: absolute; top: 6px; right: 32px; border: 0; background: none; color: inherit; opacity: .6; cursor: pointer; font-size: 15px; }
+.hw-x:hover { opacity: 1; }
+.hw-brand b { display: block; font-family: var(--display); font-weight: 300; font-size: 28px; letter-spacing: .06em; line-height: 1.1; }
+.hw-brand span { display: block; margin-top: 4px; font-size: 12px; font-weight: 600; letter-spacing: .04em; opacity: .8; }
+.hw-brand p { margin: 16px 0 0; font-size: 12px; line-height: 1.45; opacity: .75; }
+.hw-power { display: flex; align-items: center; justify-content: center; gap: 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+.hw-btn { width: 42px; height: 42px; border-radius: 50%; border: 0; cursor: pointer; background: radial-gradient(circle at 40% 30%, #f4f6f8, #a9b1ba 60%, #6f7883); box-shadow: 0 4px 0 #0b0d10, 0 6px 12px rgba(0, 0, 0, .5), inset 0 -2px 3px rgba(0, 0, 0, .25); }
+.hw-btn.on { transform: translateY(2px); box-shadow: 0 2px 0 #0b0d10, 0 3px 6px rgba(0, 0, 0, .5), inset 0 -2px 3px rgba(0, 0, 0, .25); }
+.lamp { width: 20px; height: 20px; border-radius: 50%; background: radial-gradient(circle at 40% 35%, #6a1d18, #2a0806); box-shadow: inset 0 0 0 2px #111, 0 0 0 3px #9aa1aa; }
+.hw-btn.on + .lamp { background: radial-gradient(circle at 40% 35%, #ffd2c9, #ff3b30 45%, #b31208); box-shadow: inset 0 0 0 2px #111, 0 0 0 3px #9aa1aa, 0 0 18px #ff3b30; }
+
+/* Компрессор: синяя ламповая панель */
+.hw-comp {
+  width: min(1000px, 94vw);
+  display: grid;
+  grid-template-columns: 210px 1fr 280px;
+  gap: 26px;
+  align-items: center;
+  color: #e8eefc;
+  background: var(--brushed), linear-gradient(180deg, #2f53a6, #22428a 50%, #1b3675);
+  background-size: 2000px 300px, auto; /* шлифовка шире прибора — без видимого шва повтора */
+  border: 1px solid #0b1430;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25), inset 0 -2px 0 rgba(0, 0, 0, .3), 0 30px 80px rgba(0, 0, 0, .7);
+}
+.hw-knobs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 4px; justify-items: center; }
+.vu { padding: 7px; border-radius: 6px; background: #0d1530; box-shadow: inset 0 2px 8px #000, 0 1px 0 rgba(255, 255, 255, .2); }
+.vu canvas { display: block; width: 100%; height: 150px; border-radius: 3px; }
+.hw-right .hw-power { margin-top: 18px; }
+
+/* Лимитер: светлая мастеринговая панель */
+.hw-lim {
+  width: min(900px, 94vw);
+  color: #1b1f25;
+  background: var(--brushed), linear-gradient(180deg, #eef0f2, #d3d8dd 40%, #c1c7ce);
+  background-size: 2000px 300px, auto;
+  border: 1px solid #0b0d10;
+  box-shadow: inset 0 1px 0 #fff, inset 0 -2px 0 rgba(0, 0, 0, .2), 0 30px 80px rgba(0, 0, 0, .7);
+}
+.hw-lim .hw-brand b { font-size: 24px; font-weight: 500; }
+.hw-lim .hw-brand span { color: #4a525d; opacity: 1; }
+.lim-main { display: grid; grid-template-columns: 1fr auto auto; gap: 26px; align-items: center; margin-top: 10px; }
+.lim-knobs { display: flex; justify-content: space-around; align-items: center; gap: 8px; }
+.lim-btns .hw-power { flex-direction: column; gap: 10px; color: #2a2f36; }
+.lim-meters { display: flex; gap: 14px; }
+.seg-meter { display: grid; grid-template-columns: 22px 26px; grid-template-rows: auto 210px auto; gap: 4px; justify-items: start; }
+.seg-meter em { grid-column: 1 / -1; justify-self: center; font: 700 13px var(--mono); font-style: normal; }
+.sm-bar { position: relative; width: 22px; height: 100%; overflow: hidden; border-radius: 3px; background: #1b1f25; box-shadow: inset 0 1px 3px #000, 0 1px 0 #fff; }
+.sm-bar b { position: absolute; inset: 2px; transform: scaleY(0); background: linear-gradient(0deg, #2f8cff, #63c3ff); -webkit-mask: repeating-linear-gradient(0deg, #000 0 6px, transparent 6px 8px); mask: repeating-linear-gradient(0deg, #000 0 6px, transparent 6px 8px); }
+.seg-meter.gr .sm-bar b { transform-origin: top; }
+.seg-meter.out .sm-bar b { transform-origin: bottom; }
+.sm-scale { position: relative; width: 26px; height: 100%; font: 10px var(--mono); color: #4a525d; }
+.sm-scale span { position: absolute; left: 3px; transform: translateY(-50%); }
+.seg-meter small { grid-column: 1 / -1; justify-self: center; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: #4a525d; }
+.lim-note { margin: 18px 0 0; max-width: 720px; font-size: 12px; line-height: 1.45; color: #4a525d; }
+@media (max-width: 900px) {
+  .hw-comp, .lim-main { grid-template-columns: 1fr; }
+}
 
 /* ===== Настройки ===== */
 .form { display: grid; grid-template-columns: 1fr max-content max-content; gap: 10px 14px; align-items: center; margin-bottom: 16px; }

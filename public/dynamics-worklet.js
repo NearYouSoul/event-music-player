@@ -13,7 +13,7 @@ class Dynamics extends AudioWorkletProcessor {
   constructor({ processorOptions }) {
     super();
     this.mode = processorOptions.mode; // 'comp' | 'limit'
-    this.conf = { on: false, threshold: -18, ratio: 3, knee: 6, attack: 0.01, release: 0.25, makeup: 0, ceiling: -1 };
+    this.conf = { on: false, threshold: -18, ratio: 3, knee: 6, attack: 0.01, release: 0.25, makeup: 0, ceiling: -1, input: 0, release: 0.08 };
     this.port.onmessage = (e) => Object.assign(this.conf, e.data);
     this.mix = 0;        // 0 — чистый звук, 1 — обработанный
     this.gr = 0;         // текущее подавление компрессора, дБ (≤ 0)
@@ -23,6 +23,8 @@ class Dynamics extends AudioWorkletProcessor {
       const L = Math.max(1, Math.round(LOOKAHEAD * sampleRate));
       this.L = L;
       this.delay = [new Float32Array(L), new Float32Array(L)]; // задержка L−1 отсчётов (кольцо длины L)
+      // тот же звук, уже усиленный «Входом»: если крутят «Вход», в задержке — ровно то, что измерил детектор
+      this.delayIn = [new Float32Array(L), new Float32Array(L)];
       this.pos = 0;
       // скользящий минимум требуемого усиления за L отсчётов (монотонная очередь)
       this.qVal = new Float64Array(L + 1);
@@ -74,10 +76,13 @@ class Dynamics extends AudioWorkletProcessor {
     } else {
       const L = this.L;
       const ceil = dbToLin(c.ceiling);
-      const rel = Math.exp(-1 / (0.08 * sampleRate));
+      const rel = Math.exp(-1 / (Math.max(c.release, 0.005) * sampleRate));
+      // «Вход»: поднимаем громкость перед лимитером (громче звучит, пики всё равно не выше потолка).
+      // Только когда лимитер включён — выключенный пропускает звук как есть.
+      const drive = c.on ? dbToLin(c.input || 0) : 1;
       for (let i = 0; i < frames; i++) {
         let peak = 0;
-        for (let ch = 0; ch < chans; ch++) peak = Math.max(peak, Math.abs(inp(ch, i)));
+        for (let ch = 0; ch < chans; ch++) peak = Math.max(peak, Math.abs(inp(ch, i)) * drive);
         const need = peak > ceil ? ceil / peak : 1;
         // монотонная очередь: минимум need за последние L отсчётов
         const n = this.n++;
@@ -97,10 +102,11 @@ class Dynamics extends AudioWorkletProcessor {
         const p = this.pos;
         const out = (p + 1) % L;
         for (let ch = 0; ch < chans; ch++) {
-          const d = this.delay[Math.min(ch, 1)];
+          const d = this.delay[Math.min(ch, 1)], di = this.delayIn[Math.min(ch, 1)];
           d[p] = inp(ch, i);
-          const dry = L > 1 ? d[out] : d[p];
-          output[ch][i] = dry * (1 - this.mix) + dry * g * this.mix;
+          di[p] = d[p] * drive;
+          const at = L > 1 ? out : p;
+          output[ch][i] = d[at] * (1 - this.mix) + di[at] * g * this.mix;
         }
         this.pos = out;
         if (c.on) minGain = Math.min(minGain, 20 * Math.log10(g));

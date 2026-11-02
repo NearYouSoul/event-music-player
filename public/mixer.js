@@ -22,6 +22,44 @@ export const BAND_TYPES = {
 };
 // у каких типов есть усиление (у срезов и режекции — только частота и Q)
 export const hasGain = (type) => ['lowshelf', 'peaking', 'highshelf'].includes(type);
+export const isCut = (type) => type === 'highpass' || type === 'lowpass';
+// у полок Web Audio не использует Q — их крутизна фиксирована
+export const hasQ = (type) => !['lowshelf', 'highshelf'].includes(type);
+export const SLOPES = [12, 24, 36, 48]; // крутизна срезов, дБ на октаву
+export const STAGES = 4;                // биквадов на полосу: срез 48 дБ/окт = 4 ступени по 12
+
+// Ступени одной полосы. Срез собирается из нескольких биквадов с добротностями фильтра Баттерворта
+// (ровная АЧХ без горба), резонанс полосы (Q) добавляется к самой «острой» ступени.
+// Колокол, полка и режекция — одна ступень; лишние ступени — колокол с усилением 0, он ничего не меняет.
+// Выключенная полоса становится прозрачной, сохраняя тип, — поэтому выключение без щелчка.
+export function bandStages(b, nyq) {
+  const idle = { type: 'peaking', freq: b.freq, q: 1, gain: 0 };
+  if (isCut(b.type)) {
+    const n = (b.slope || 12) / 12;
+    const freq = b.on ? b.freq : b.type === 'highpass' ? 10 : Math.min(22000, nyq * 0.92);
+    return Array.from({ length: STAGES }, (_, k) => {
+      if (k >= n) return idle;
+      const q = 1 / (2 * Math.sin(((2 * k + 1) * Math.PI) / (4 * n)));
+      return { type: b.type, freq, q: k === 0 ? q * (b.q / Math.SQRT1_2) : q, gain: 0 };
+    });
+  }
+  const main = {
+    type: b.type,
+    freq: b.freq,
+    q: !b.on && b.type === 'notch' ? 1000 : b.q,
+    gain: b.on && hasGain(b.type) ? b.gain : 0,
+  };
+  return [main, idle, idle, idle];
+}
+
+// Настроить биквад на ступень. У срезов Web Audio принимает Q в децибелах (так в спецификации),
+// у остальных типов — обычное число.
+export function setStage(f, st, set) {
+  if (f.type !== st.type) f.type = st.type;
+  set(f.frequency, st.freq);
+  set(f.Q, isCut(st.type) ? 20 * Math.log10(st.q) : st.q);
+  set(f.gain, st.gain);
+}
 
 export class Strip {
   constructor(ctx, id) {
@@ -29,12 +67,21 @@ export class Strip {
     this.id = id;
     this.input = ctx.createGain();
     // EQ: вход делится на «обработанный» (через полосы) и «чистый»; включение — перекрёстный фейд
-    this.bands = Array.from({ length: 7 }, () => ctx.createBiquadFilter());
+    this.bands = Array.from({ length: 7 }, () => Array.from({ length: STAGES }, () => ctx.createBiquadFilter()));
     this.eqWet = ctx.createGain();
     this.eqDry = ctx.createGain();
     this.eqOut = ctx.createGain();
     this.eqWet.gain.value = 0; // до первых настроек — чистый звук
-    this.bands.reduce((a, b) => (a.connect(b), b), this.input).connect(this.eqWet).connect(this.eqOut);
+    this.bands.flat().reduce((a, b) => (a.connect(b), b), this.input).connect(this.eqWet).connect(this.eqOut);
+    // спектр до эквалайзера — окно эквалайзера показывает «до» и «после»
+    this.preAnalyser = ctx.createAnalyser();
+    this.preAnalyser.fftSize = 4096;
+    this.preAnalyser.smoothingTimeConstant = 0.75;
+    this.input.connect(this.preAnalyser);
+    this.eqAnalyser = ctx.createAnalyser();
+    this.eqAnalyser.fftSize = 4096;
+    this.eqAnalyser.smoothingTimeConstant = 0.75;
+    this.eqOut.connect(this.eqAnalyser);
     this.input.connect(this.eqDry).connect(this.eqOut);
     const dyn = (mode) => {
       const node = new AudioWorkletNode(ctx, 'dynamics', {
@@ -72,16 +119,10 @@ export class Strip {
     const t = this.ctx.currentTime;
     const smooth = (param, v) => param.setTargetAtTime(v, t, 0.015);
     const nyq = this.ctx.sampleRate / 2;
-    conf.eq.bands.forEach((b, i) => {
-      const f = this.bands[i];
-      if (f.type !== b.type) f.type = b.type;
-      // выключенная полоса не вынимается из цепочки, а становится прозрачной — плавно, без щелчка
-      const off = !b.on;
-      smooth(f.frequency, off && b.type === 'highpass' ? 10 : off && b.type === 'lowpass' ? Math.min(22000, nyq * 0.92) : b.freq);
-      smooth(f.Q, off && b.type === 'notch' ? 1000 : b.q);
-      smooth(f.gain, off || !hasGain(b.type) ? 0 : b.gain);
-    });
-    smooth(this.eqWet.gain, conf.eq.on ? 1 : 0);
+    // выключенная полоса не вынимается из цепочки, а становится прозрачной — плавно, без щелчка
+    conf.eq.bands.forEach((b, i) => bandStages(b, nyq).forEach((st, k) => setStage(this.bands[i][k], st, smooth)));
+    // «Выход» эквалайзера — общее усиление после полос
+    smooth(this.eqWet.gain, conf.eq.on ? 10 ** ((conf.eq.output || 0) / 20) : 0);
     smooth(this.eqDry.gain, conf.eq.on ? 0 : 1);
     this.comp.port.postMessage(conf.comp);
     if (this.limiter) this.limiter.port.postMessage(conf.limiter);

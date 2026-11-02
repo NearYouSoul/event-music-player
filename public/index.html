@@ -10,6 +10,7 @@
   <nav>
     <div class="brand"><i></i>Event<b>Player</b></div>
     <button data-tab="live" class="active">Эфир</button>
+    <button data-tab="background">Фон</button>
     <button data-tab="jingles">Разметка отбивок</button>
     <button data-tab="pads">Пэды</button>
     <button data-tab="mixer">Микшер</button>
@@ -49,6 +50,24 @@
       </div>
       <div id="live-on" hidden>
         <div id="live-pad"></div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-background">
+      <div class="editor">
+        <div class="card">
+          <div class="row"><h3>Фон <span class="mono small">music/background</span></h3><span class="grow"></span>
+            <button class="btn" id="b-reload" title="Пересканировать папку">⟳</button></div>
+          <div class="tagbar" id="b-filters"></div>
+          <div class="row b-pl-head"><span class="muted small">Плейлисты</span></div>
+          <div class="tagbar" id="b-playlists"></div>
+          <div id="b-source"></div>
+          <div class="list" id="b-list"></div>
+        </div>
+        <div class="card" id="b-editor">
+          <p class="muted">Выбери трек слева, чтобы послушать его, поставить в закладки, раскидать по тегам и плейлистам.
+            Трек можно перетащить прямо на тег или плейлист.</p>
+        </div>
       </div>
     </section>
 

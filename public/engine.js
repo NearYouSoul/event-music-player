@@ -81,6 +81,18 @@ function waitEvent(el, name) {
 // Точка отбивки: число (старт) или объект со своими параметрами
 export const cueOf = (c) => (typeof c === 'number' ? { t: c } : c);
 
+// Из каких треков играет фон. null — из всех. Для плейлиста — в его порядке.
+export function bgPool(lib, src) {
+  if (src.type === 'tag') return Object.keys(lib.trackTags).filter((t) => lib.trackTags[t].includes(src.name));
+  if (src.type === 'bookmarks') return lib.bookmarks;
+  if (src.type === 'playlist') return lib.playlists.find((p) => p.name === src.name)?.tracks || [];
+  return null;
+}
+
+// Подпись источника фона: на кнопках эфира и в сообщениях
+export const bgSourceLabel = (src) =>
+  ({ tag: '#' + src.name, bookmarks: '★ Закладки', playlist: '▤ ' + src.name }[src.type] || 'Все');
+
 export class Engine {
   constructor(getSettings, onStatus, saveSettings) {
     this.s = getSettings;
@@ -174,10 +186,21 @@ export class Engine {
       fg: fg ? { kind: fg.kind, name: fg.name, bank: fg.bank, slot: fg.slot, dur: fg.dur, loop: !!fg.loop, elapsed: (performance.now() - fg.startedAt) / 1000 } : null,
       bank: this.bank,
       jingleTag: this.jingleTag,
+      bgSource: s.bgSource || { type: 'all' },
+      bgPlace: this.bgPlace(),
       lastJingle: this.lastJingle,
       volumes: Object.fromEntries(CHANNELS.map((c) => [c.id, s[c.volume]])),
       ...extra,
     });
+  }
+
+  // Место текущего трека в плейлисте, «3 / 10» — только когда фон играет из плейлиста
+  bgPlace() {
+    const src = this.s().bgSource;
+    if (src?.type !== 'playlist' || !this.bg.track) return null;
+    const list = bgPool(this.s().bgLibrary, src);
+    const i = list.indexOf(this.bg.track);
+    return i < 0 ? null : { i: i + 1, n: list.length };
   }
 
   setVolume(target, value) {
@@ -205,7 +228,7 @@ export class Engine {
       return false;
     }
     if (this.bg.state !== 'playing') return false; // пока грузился список, нажали Pause/Stop
-    const track = this.bgRotation.pick(background);
+    const track = this.nextBgTrack(background);
     this.bgRotation.played(track);
     this.bg.track = track;
     d.el.src = '/media/background/' + enc(track);
@@ -215,6 +238,43 @@ export class Engine {
     this.fade(d.gain.gain, 1, fadeIn);
     this.emit();
     return true;
+  }
+
+  // Следующий фоновый трек:
+  //  - выбранный вручную («В эфир» во вкладке «Фон») — он;
+  //  - плейлист — по порядку, следом за последним начатым (после Stop — со следующего, по кругу);
+  //  - все / тег / закладки — честной ротацией, без повторов.
+  nextBgTrack(background) {
+    const s = this.s();
+    const have = new Set(background);
+    const forced = this.forceTrack;
+    this.forceTrack = null;
+    const src = s.bgSource || { type: 'all' };
+    const pool = (bgPool(s.bgLibrary, src) || background).filter((t) => have.has(t));
+    let track;
+    if (forced && have.has(forced)) track = forced;
+    else if (!pool.length) {
+      this.emit({ error: `${bgSourceLabel(src)}: нет треков, играют все` });
+      track = this.bgRotation.pick(background);
+    } else if (src.type === 'playlist') {
+      track = pool[(pool.indexOf(s.bgPlaylistPos[src.name]) + 1) % pool.length];
+    } else track = this.bgRotation.pick(pool);
+    if (src.type === 'playlist' && pool.includes(track)) this.save({ bgPlaylistPos: { ...s.bgPlaylistPos, [src.name]: track } });
+    return track;
+  }
+
+  // Сменить источник фона. Играющий трек доигрывает, следующий — уже из нового источника.
+  setBgSource(src) {
+    this.save({ bgSource: src && src.type ? src : { type: 'all' } });
+    this.emit();
+  }
+
+  // Поставить конкретный трек в эфир: переходом, если фон играет, иначе с начала
+  bgPlayTrack(name) {
+    this.forceTrack = name;
+    if (this.bg.state === 'playing') return this.bgNext();
+    this.bg.state = 'stopped'; // и с паузы — сразу новый трек
+    return this.bgPlay();
   }
 
   async bgPlay() {
@@ -489,6 +549,8 @@ export class Engine {
       case 'jingleStop': return this.stopJingle();
       case 'jingleTag': this.jingleTag = msg.tag || null; return this.emit();
       case 'bgNext': return this.bg.state === 'playing' && this.bgNext();
+      case 'bgSource': return this.setBgSource(msg.source);
+      case 'bgTrack': return this.bgPlayTrack(String(msg.name));
       case 'pad': return this.pad(Number(msg.slot));
       case 'padDown': return this.padDown(Number(msg.slot));
       case 'padUp': return this.padUp(Number(msg.slot));
