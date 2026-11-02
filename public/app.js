@@ -236,6 +236,36 @@ async function loadBgList() {
 $('#b-reload').addEventListener('click', loadBgList);
 $('#b-search').addEventListener('input', () => renderBgList());
 
+// Удалить трек из music/ — в Корзину Windows, оттуда можно вернуть.
+// Отбивка уходит вместе с разметкой, фоновый трек сервер убирает и из тегов, закладок, плейлистов.
+async function deleteTrack(category, name) {
+  const extra = category === 'jingles' ? ' вместе с разметкой (точками)' : ' и из тегов, закладок, плейлистов';
+  const onAir = category === 'background' && name === onAirBg ? '\nОн сейчас играет в эфире — фон перейдёт на следующий трек.' : '';
+  if (!confirm(`Удалить «${trackName(name)}» из папки music/${category}${extra}?\nФайл уйдёт в Корзину Windows — оттуда его можно вернуть.${onAir}`)) return;
+  const res = await fetch(`/api/track/${category}/${encodeURIComponent(name)}`, { method: 'DELETE' });
+  const data = await res.json();
+  if (!res.ok) return alert(data.error);
+  const done = '<p class="muted">Трек удалён (лежит в Корзине Windows). Выбери другой слева.</p>';
+  if (category === 'jingles') {
+    jPreview?.stop();
+    jw?.ws.destroy();
+    jw = null;
+    current = null;
+    cues = [];
+    dirty = false;
+    $('#j-editor').innerHTML = done;
+    loadJingleList();
+  } else {
+    if (name === onAirBg && engine?.bg.state === 'playing') engine.bgNext();
+    bw?.ws.destroy();
+    bw = null;
+    bOpen = null;
+    settings = data.settings;
+    $('#b-editor').innerHTML = done;
+    loadBgList();
+  }
+}
+
 // Из эфира — к треку в редакторе: открыть его и прокрутить список к нему (фильтр и поиск сбрасываются)
 async function openInEditor(kind, name) {
   if (kind === 'jingle') {
@@ -413,6 +443,7 @@ function openBgTrack(name) {
       <h2>${escapeHtml(trackName(name))}</h2>
       <button class="btn star-btn" id="b-star"></button>
       <button class="btn accent" id="b-air" title="Поставить этот трек фоном прямо сейчас">▶ В эфир</button>
+      <button class="btn stop" id="b-del" title="Удалить трек из папки (в Корзину Windows)">🗑</button>
     </div>
     <div class="row b-groups"><span class="muted small">Теги</span><div class="tagbar" id="b-tags"></div></div>
     <div class="row b-groups"><span class="muted small">Плейлисты</span><div class="tagbar" id="b-pls"></div></div>
@@ -435,6 +466,7 @@ function openBgTrack(name) {
   $('#b-in').onclick = bw.zoomIn;
   $('#b-out').onclick = bw.zoomOut;
   $('#b-fit').onclick = bw.fit;
+  $('#b-del').onclick = () => deleteTrack('background', name);
   $('#b-air').onclick = () => {
     if (!engine) return alert('Сначала начни эфир во вкладке «Эфир».');
     bw.ws.pause();
@@ -590,6 +622,7 @@ function openJingle(name) {
       <h2>${escapeHtml(trackName(name))}</h2>
       <span id="e-msg"></span>
       <button class="btn" id="e-save">💾 Сохранить точки</button>
+      <button class="btn stop" id="e-del" title="Удалить трек и его разметку из папки (в Корзину Windows)">🗑</button>
     </div>
     <div class="row"><span class="muted small">Разделы:</span><div class="tagbar" id="e-tags"></div></div>
     <div class="row">
@@ -630,6 +663,7 @@ function openJingle(name) {
   $('#e-out').onclick = jw.zoomOut;
   $('#e-fit').onclick = jw.fit;
   $('#e-save').onclick = saveCues;
+  $('#e-del').onclick = () => deleteTrack('jingles', name);
   renderCueList();
   renderTrackTags();
   loadJingleList();

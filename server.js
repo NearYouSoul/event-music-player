@@ -6,6 +6,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const http = require('http');
+const { execFile } = require('child_process');
 const QRCode = require('qrcode');
 const { WebSocketServer } = require('ws');
 
@@ -155,6 +156,25 @@ function normalizeCue(c) {
 
 const jingleExists = (track) => fs.existsSync(path.join(MUSIC, 'jingles', track));
 
+// В Корзину Windows — тем же вызовом, что «Удалить» в Проводнике: удалённое по ошибке можно вернуть.
+// Пути передаются через переменную окружения, а не в текст команды, — имя файла не может стать кодом.
+// На других системах — обычное удаление.
+function toTrash(files) {
+  if (process.platform !== 'win32') {
+    for (const f of files) fs.rmSync(f, { force: true });
+    return Promise.resolve();
+  }
+  const script = 'Add-Type -AssemblyName Microsoft.VisualBasic; ' +
+    'foreach ($f in ($env:EMP_TRASH -split "`n")) { [Microsoft.VisualBasic.FileIO.FileSystem]::DeleteFile($f, "OnlyErrorDialogs", "SendToRecycleBin") }';
+  return new Promise((resolve, reject) => execFile('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script],
+    { windowsHide: true, timeout: 15000, env: { ...process.env, EMP_TRASH: files.join('\n') } },
+    (err, out, stderr) => {
+      const left = files.filter((f) => fs.existsSync(f));
+      if (err || left.length) reject(new Error((stderr || '').trim() || err?.message || 'файл занят другой программой'));
+      else resolve();
+    }));
+}
+
 function lanAddresses() {
   const out = [];
   for (const list of Object.values(os.networkInterfaces())) {
@@ -220,6 +240,34 @@ app.delete('/api/tags/:tag', (req, res) => {
   writeSettings(settings);
   broadcast({ type: 'settings', settings });
   res.json(settings);
+});
+
+// Удаление трека фона или отбивки. Отбивка уходит вместе с разметкой (трек.json рядом),
+// фоновый трек заодно убирается из тегов, закладок и плейлистов.
+app.delete('/api/track/:category/:track', async (req, res) => {
+  const { category } = req.params;
+  if (!['background', 'jingles'].includes(category)) return res.status(400).json({ error: 'Удалять можно только фон и отбивки' });
+  const track = path.basename(req.params.track);
+  const file = path.join(MUSIC, category, track);
+  if (!fs.existsSync(file)) return res.status(404).json({ error: 'Файла уже нет' });
+  const files = [file];
+  if (category === 'jingles' && fs.existsSync(cuesFile(track))) files.push(cuesFile(track));
+  try {
+    await toTrash(files);
+  } catch (e) {
+    return res.status(500).json({ error: 'Не удалось удалить: ' + e.message });
+  }
+  let settings;
+  if (category === 'background') {
+    settings = loadSettings();
+    const L = settings.bgLibrary;
+    delete L.trackTags[track];
+    L.bookmarks = L.bookmarks.filter((t) => t !== track);
+    for (const p of L.playlists) p.tracks = p.tracks.filter((t) => t !== track);
+    writeSettings(settings);
+    broadcast({ type: 'settings', settings });
+  }
+  res.json({ ok: true, settings });
 });
 
 // Drag & drop на пэд: браузер шлёт файл как есть, имя — в заголовке
