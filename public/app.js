@@ -12,6 +12,9 @@ const $ = (s) => document.querySelector(s);
 const api = async (url, body) =>
   (await fetch(url, body ? { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) } : {})).json();
 const fmt = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`;
+// Поиск по названию: без учёта регистра, «_», «-» и «.» считаются пробелами
+const norm = (s) => s.toLowerCase().replace(/[_\-.]+/g, ' ');
+const matches = (name, q) => !q.trim() || norm(name).includes(norm(q).trim());
 // Имя трека без расширения: в списках и заголовках .mp3 только мешает
 const trackName = (f) => f.replace(/\.[^.]+$/, '').replace(/_/g, ' ');
 const AUDIO_RE = /\.(mp3|wav|ogg|m4a|aac|flac)$/i;
@@ -98,6 +101,7 @@ function mountPad() {
   showStatus = renderPad($('#live-pad'), settings, (msg) => engine.command(msg), {
     master: true,
     analyser: () => engine?.strips?.master.analyser,
+    openTrack: openInEditor,
   });
   if (engine) engine.emit();
 }
@@ -230,6 +234,26 @@ async function loadBgList() {
   renderBgLibrary();
 }
 $('#b-reload').addEventListener('click', loadBgList);
+$('#b-search').addEventListener('input', () => renderBgList());
+
+// Из эфира — к треку в редакторе: открыть его и прокрутить список к нему (фильтр и поиск сбрасываются)
+async function openInEditor(kind, name) {
+  if (kind === 'jingle') {
+    tagFilter = '*';
+    $('#j-search').value = '';
+    document.querySelector('nav [data-tab=jingles]').click();
+    await loadJingleList(); // точки трека берутся из списка — сначала он
+    openJingle(name);
+    await loadJingleList();
+  } else {
+    bFilter = { type: 'all' };
+    $('#b-search').value = '';
+    document.querySelector('nav [data-tab=background]').click();
+    await loadBgList();
+    openBgTrack(name);
+  }
+  document.querySelector(`#${kind === 'jingle' ? 'j' : 'b'}-list [data-name="${CSS.escape(name)}"]`)?.scrollIntoView({ block: 'center' });
+}
 
 function shownTracks() {
   if (bFilter.type === 'untagged') return bgTracks.filter((t) => !tagsOf(t).length);
@@ -352,20 +376,22 @@ function renderBgSource() {
 }
 
 function renderBgList() {
-  const list = shownTracks();
+  // номер в плейлисте — настоящий, даже когда часть треков скрыта поиском
+  const q = $('#b-search').value;
+  const list = shownTracks().map((t, i) => ({ t, i })).filter((x) => matches(x.t, q));
   const pl = bFilter.type === 'playlist';
   const L = lib();
   const empty = { bookmarks: 'Закладок нет. Нажми ★ у трека.', playlist: 'Плейлист пуст. Перетащи сюда треки или отметь плейлист справа.',
     tag: 'В этом теге пусто. Перетащи треки на тег.' }[bFilter.type] || (bgTracks.length ? 'Пусто.' : 'Папка пуста — закинь треки в music/background');
   $('#b-list').innerHTML = list.length
-    ? list.map((t, i) => `
+    ? list.map(({ t, i }) => `
       <div data-name="${escapeHtml(t)}" draggable="true" class="b-row ${t === bOpen ? 'active' : ''} ${t === onAirBg ? 'onair' : ''}">
         ${pl ? `<span class="b-num mono">${i + 1}</span>` : ''}
         <button class="star ${L.bookmarks.includes(t) ? 'on' : ''}" data-star title="Закладка">★</button>
         <span class="b-name">${escapeHtml(trackName(t))}</span>
         ${pl ? '<span class="b-acts"><button data-up title="Выше">↑</button><button data-down title="Ниже">↓</button><button data-out title="Убрать из плейлиста">✕</button></span>' : ''}
       </div>`).join('')
-    : `<div class="muted">${empty}</div>`;
+    : `<div class="muted">${q.trim() ? 'Ничего не найдено.' : empty}</div>`;
   $('#b-list').querySelectorAll('[data-name]').forEach((el) => {
     const t = el.dataset.name;
     el.onclick = (e) => {
@@ -453,18 +479,24 @@ const NO_TAG = '';
 async function loadJingleList() {
   ({ jingles } = await api('/api/library'));
   renderTagBar();
+  renderJingleList();
+}
+
+function renderJingleList() {
+  const q = $('#j-search').value;
   const shown = jingles.filter((j) =>
-    tagFilter === '*' ? true : tagFilter === NO_TAG ? !j.tags.length : j.tags.includes(tagFilter));
+    (tagFilter === '*' ? true : tagFilter === NO_TAG ? !j.tags.length : j.tags.includes(tagFilter)) && matches(j.name, q));
   $('#j-list').innerHTML = shown.length
     ? shown.map((j) => `<div data-name="${escapeHtml(j.name)}" draggable="true" class="${j.name === current ? 'active' : ''}">
         <span>${escapeHtml(trackName(j.name))}</span><span class="count">${j.cues.length || ''}</span></div>`).join('')
-    : `<div class="muted">${jingles.length ? 'В этом разделе пусто. Перетащи сюда треки из «Все».' : 'Папка пуста — закинь треки в music/jingles'}</div>`;
+    : `<div class="muted">${q.trim() ? 'Ничего не найдено.' : jingles.length ? 'В этом разделе пусто. Перетащи сюда треки из «Все».' : 'Папка пуста — закинь треки в music/jingles'}</div>`;
   $('#j-list').querySelectorAll('[data-name]').forEach((el) => {
     el.addEventListener('click', () => openJingle(el.dataset.name));
     el.addEventListener('dragstart', (e) => e.dataTransfer.setData('text/jingle', el.dataset.name));
   });
 }
 $('#j-reload').addEventListener('click', loadJingleList);
+$('#j-search').addEventListener('input', renderJingleList);
 
 function renderTagBar() {
   const count = (t) => jingles.filter((j) => (t === NO_TAG ? !j.tags.length : j.tags.includes(t))).length;

@@ -1,10 +1,14 @@
 import { bgSourceLabel } from '/engine.js';
 
+// Значок «перейти к треку» (только на ноутбуке: на телефоне редакторов нет)
+const GO_ICON = '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path d="M6.5 3H3v10h10V9.5M9.5 2.5h4v4M13.5 2.5 7.5 8.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
 // Панель эфира: раздел «Игра» (отбивка + пэды), «Фон» и «Уровни» (крутилки громкости).
 // Одна и та же на ноутбуке (колонками) и на телефоне (вкладками).
 // send(msg) — что делать при нажатии; возвращает функцию для показа статуса.
 // analyser — только на ноутбуке: откуда брать спектр для экрана в «Уровнях».
-export function renderPad(root, settings, send, { tabs = false, master = false, analyser = null } = {}) {
+// openTrack(kind, name) — только на ноутбуке: открыть трек в «Разметке отбивок» (jingle) или во вкладке «Фон» (bg).
+export function renderPad(root, settings, send, { tabs = false, master = false, analyser = null, openTrack = null } = {}) {
   // Все банки рисуем сразу, видимый переключается статусом — без перерисовки и задержки
   const banks = settings.banks.map((b, bank) => {
     const pads = b.pads.map((p, i) => ({ ...p, bank, slot: i })).filter((p) => p.file);
@@ -45,7 +49,8 @@ export function renderPad(root, settings, send, { tabs = false, master = false, 
     <div class="deck-grid ${tabs ? 'tabs' : ''}">
       <section class="deck game" data-sec="game">
         <h3>Игра</h3>
-        <div class="now-jingle" id="nj"><div class="nj-track"><span id="nj-text"></span></div></div>
+        <div class="now-jingle" id="nj"><div class="nj-track"><span id="nj-text"></span></div>${openTrack
+          ? `<button class="go-track" id="nj-go" hidden title="Открыть в «Разметке отбивок»">${GO_ICON}</button>` : ''}</div>
         <div class="jingle-row">
           <button class="jingle-btn" data-cmd="jingle"><span>Отбивка</span><small id="jingle-mode">случайная</small><b class="bar"></b></button>
           <button class="btn stop" data-cmd="jingleStop">Стоп</button>
@@ -64,7 +69,8 @@ export function renderPad(root, settings, send, { tabs = false, master = false, 
             <div class="arm"><div class="arm-rod"></div><div class="arm-head"></div></div>
           </div>
           <div class="now">
-            <div class="track" id="bg-track">—</div>
+            <div class="track-row"><div class="track" id="bg-track">—</div>${openTrack
+              ? `<button class="go-track" id="bg-go" hidden title="Открыть во вкладке «Фон»">${GO_ICON}</button>` : ''}</div>
             <div class="bg-place" id="bg-place"></div>
             <div class="progress"><b class="bar" id="bg-bar"></b></div>
             <div class="times"><span id="bg-pos">0:00</span><span id="bg-left">-0:00</span></div>
@@ -116,6 +122,9 @@ export function renderPad(root, settings, send, { tabs = false, master = false, 
   root.querySelectorAll('[data-jtag]').forEach((b) =>
     b.addEventListener('click', () => send({ type: 'cmd', cmd: 'jingleTag', tag: b.dataset.jtag })),
   );
+  let njName = null, bgName = null; // треки, к которым ведут значки «перейти»
+  root.querySelector('#nj-go')?.addEventListener('click', () => njName && openTrack('jingle', njName));
+  root.querySelector('#bg-go')?.addEventListener('click', () => bgName && openTrack('bg', bgName));
   root.querySelectorAll('[data-bgsrc]').forEach((b) =>
     b.addEventListener('click', () => send({ type: 'cmd', cmd: 'bgSource', source: JSON.parse(b.dataset.bgsrc) })),
   );
@@ -153,6 +162,8 @@ export function renderPad(root, settings, send, { tabs = false, master = false, 
     $('#vinyl').classList.toggle('spin', playing);
     $('#vinyl').classList.toggle('loaded', st.bg !== 'stopped');
     $('#bg-track').textContent = st.bgTrack ? trackTitle(st.bgTrack) : 'Фон остановлен';
+    bgName = st.bgTrack;
+    if ($('#bg-go')) $('#bg-go').hidden = !bgName;
     const src = st.bgSource || { type: 'all' };
     root.querySelectorAll('[data-bgsrc]').forEach((b) => {
       const s = JSON.parse(b.dataset.bgsrc);
@@ -202,6 +213,8 @@ export function renderPad(root, settings, send, { tabs = false, master = false, 
   // или, приглушённо, что играло последним — чтобы было что ответить «а что это было?»
   function showNowJingle(playingName, lastName) {
     const text = playingName ? trackTitle(playingName) : lastName ? 'Последняя: ' + trackTitle(lastName) : '';
+    njName = playingName || lastName;
+    if ($('#nj-go')) $('#nj-go').hidden = !njName;
     $('#nj').classList.toggle('live', !!playingName);
     if (text === njText) return; // не перезапускаем бегущую строку на каждом статусе
     njText = text;
