@@ -49,7 +49,7 @@
     function mount() {
       showStatus = renderPad(document.getElementById('pad'), settings, (m) => {
         send(m);
-        if (m.cmd !== 'volume') navigator.vibrate?.(30);
+        if (!['volume', 'padUp'].includes(m.cmd)) navigator.vibrate?.(30);
       }, { tabs: true });
       showStatus(lastStatus);
     }

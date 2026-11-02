@@ -2,9 +2,17 @@
 // Одна и та же на ноутбуке (колонками) и на телефоне (вкладками).
 // send(msg) — что делать при нажатии; возвращает функцию для показа статуса.
 export function renderPad(root, settings, send, { tabs = false, master = false } = {}) {
-  const pads = settings.pads.map((p, i) => ({ ...p, slot: i })).filter((p) => p.file);
-  // Пэды идут по 2 в ряд; нечётный хвост добиваем пустой ячейкой
-  const cells = pads.map(padHtml).join('') + (pads.length % 2 ? '<div class="pad-cell empty"></div>' : '');
+  // Все банки рисуем сразу, видимый переключается статусом — без перерисовки и задержки
+  const banks = settings.banks.map((b, bank) => {
+    const pads = b.pads.map((p, i) => ({ ...p, bank, slot: i })).filter((p) => p.file);
+    // Пэды идут по 2 в ряд; нечётный хвост добиваем пустой ячейкой
+    const cells = pads.map(padHtml).join('') + (pads.length % 2 ? '<div class="pad-cell empty"></div>' : '');
+    return `<div class="pads" data-bank-grid="${bank}" ${bank === settings.activeBank ? '' : 'hidden'}>${cells ||
+      '<p class="muted">В этом банке нет пэдов со звуком. Назначь их на ноутбуке во вкладке «Пэды».</p>'}</div>`;
+  }).join('');
+  const bankBar = settings.banks.length > 1
+    ? `<div class="banks">${settings.banks.map((b, i) => `<button data-bank-btn="${i}">${escapeHtml(b.name)}</button>`).join('')}</div>`
+    : '';
   // Переключатель разделов отбивок (включается в «Разметке отбивок»)
   const jtags = settings.showJingleTags && settings.jingleTags.length
     ? `<div class="jtags">${['', ...settings.jingleTags].map((t) =>
@@ -26,7 +34,12 @@ export function renderPad(root, settings, send, { tabs = false, master = false }
           <button class="btn stop" data-cmd="jingleStop">Стоп</button>
         </div>
         ${jtags}
-        <div class="pads-scroll"><div class="pads">${cells || '<p class="muted">Пэды не настроены. Назначь звуки на ноутбуке во вкладке «Пэды».</p>'}</div></div>
+        ${bankBar}
+        <div class="pads-scroll">${banks}</div>
+        <div class="knobs game-knobs">
+          <div class="knob small" data-target="jingles"></div>
+          <div class="knob small" data-target="pads"></div>
+        </div>
       </section>
       <section class="deck bg" data-sec="bg" ${tabs ? 'hidden' : ''}>
         <h3>Фон</h3>
@@ -57,6 +70,23 @@ export function renderPad(root, settings, send, { tabs = false, master = false }
   root.querySelectorAll('button[data-cmd]').forEach((b) =>
     b.addEventListener('click', () => send({ type: 'cmd', cmd: b.dataset.cmd, slot: b.dataset.slot })),
   );
+  // Пэд в режиме «пока держишь»: звук от касания до отпускания
+  root.querySelectorAll('[data-hold]').forEach((b) => {
+    const slot = b.dataset.slot;
+    let down = false;
+    b.addEventListener('pointerdown', (e) => {
+      down = true;
+      b.setPointerCapture(e.pointerId);
+      send({ type: 'cmd', cmd: 'padDown', slot });
+    });
+    const up = () => { if (down) send({ type: 'cmd', cmd: 'padUp', slot }); down = false; };
+    b.addEventListener('pointerup', up);
+    b.addEventListener('pointercancel', up);
+    b.addEventListener('contextmenu', (e) => e.preventDefault()); // долгое касание на телефоне
+  });
+  root.querySelectorAll('[data-bank-btn]').forEach((b) =>
+    b.addEventListener('click', () => send({ type: 'cmd', cmd: 'bank', bank: b.dataset.bankBtn })),
+  );
   root.querySelectorAll('[data-jtag]').forEach((b) =>
     b.addEventListener('click', () => send({ type: 'cmd', cmd: 'jingleTag', tag: b.dataset.jtag })),
   );
@@ -69,7 +99,8 @@ export function renderPad(root, settings, send, { tabs = false, master = false }
   const knobs = {};
   root.querySelectorAll('.knob').forEach((el) => {
     const target = el.dataset.target;
-    knobs[target] = makeKnob(el, target === 'master' ? 'Master' : 'Громкость фона', (value) =>
+    const label = { master: 'Master', bg: 'Громкость фона', jingles: 'Отбивки', pads: 'Пэды' }[target];
+    knobs[target] = makeKnob(el, label, (value) =>
       send({ type: 'cmd', cmd: 'volume', target, value }),
     );
   });
@@ -107,11 +138,17 @@ export function renderPad(root, settings, send, { tabs = false, master = false }
     root.querySelectorAll('.on').forEach((b) => b.classList.remove('on'));
     root.querySelectorAll('.pad-cell .bar, .jingle-btn .bar').forEach((b) => animateBar(b, 0, 0, false));
     const fg = st.fg;
-    const fgEl = fg && (fg.kind === 'jingle' ? $('.jingle-btn') : $(`[data-slot="${fg.slot}"]`));
+    const fgEl = fg && (fg.kind === 'jingle' ? $('.jingle-btn') : $(`.pad-cell[data-bank="${fg.bank}"][data-slot="${fg.slot}"]`));
     if (fgEl) {
       fgEl.classList.add('on');
       animateBar(fgEl.querySelector('.bar'), fg.elapsed, fg.dur, true);
     }
+    // Банк: видна его сетка; точка на кнопке банка — там сейчас играет пэд
+    root.querySelectorAll('[data-bank-grid]').forEach((g) => (g.hidden = Number(g.dataset.bankGrid) !== st.bank));
+    root.querySelectorAll('[data-bank-btn]').forEach((b) => {
+      b.classList.toggle('active', Number(b.dataset.bankBtn) === st.bank);
+      b.classList.toggle('playing', !!fg && fg.kind === 'pad' && fg.bank === Number(b.dataset.bankBtn));
+    });
     showNowJingle(fg && fg.kind === 'jingle' ? fg.name : null, st.lastJingle);
     const tag = st.jingleTag || '';
     root.querySelectorAll('[data-jtag]').forEach((b) => b.classList.toggle('active', b.dataset.jtag === tag));
@@ -121,8 +158,7 @@ export function renderPad(root, settings, send, { tabs = false, master = false }
     $('#dot-game')?.classList.toggle('live', !!fg);
     $('#dot-bg')?.classList.toggle('live', playing);
 
-    if (knobs.bg) knobs.bg.set(st.bgVolume);
-    if (knobs.master) knobs.master.set(st.masterVolume);
+    for (const k in knobs) knobs[k].set(st.volumes?.[k]);
   };
 
   // Над кнопкой «Отбивка»: что играет сейчас (бегущей строкой, если не влезает)
@@ -156,8 +192,10 @@ export function renderPad(root, settings, send, { tabs = false, master = false }
 
 function padHtml(p) {
   const bg = p.image ? `style="--img:url('/media/images/${encodeURIComponent(p.image)}')"` : '';
-  return `<button class="pad-cell h${p.slot} ${p.image ? 'has-img' : ''}" data-cmd="pad" data-slot="${p.slot}" ${bg}>
-    <span class="hue"></span><span class="name">${escapeHtml(p.name)}</span><b class="bar"></b>
+  const mode = p.mode === 'hold' ? 'data-hold' : 'data-cmd="pad"';
+  const badge = { loop: '⟳', hold: '✋' }[p.mode] || '';
+  return `<button class="pad-cell h${p.slot} ${p.image ? 'has-img' : ''}" ${mode} data-bank="${p.bank}" data-slot="${p.slot}" ${bg}>
+    <span class="hue"></span><span class="name">${escapeHtml(p.name)}</span>${badge ? `<i class="mode">${badge}</i>` : ''}<b class="bar"></b>
   </button>`;
 }
 
@@ -225,7 +263,7 @@ const fmt = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(
 const trackTitle = (f) => f.replace(/\.[^.]+$/, '').replace(/_/g, ' ');
 
 // Что из настроек видно на пульте: при изменении пульт перерисовывается
-export const padKey = (s) => JSON.stringify([s.pads, s.jingleTags, s.showJingleTags]);
+export const padKey = (s) => JSON.stringify([s.banks, s.jingleTags, s.showJingleTags]);
 
 export function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);

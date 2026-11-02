@@ -12,8 +12,33 @@
     <button data-tab="live" class="active">Эфир</button>
     <button data-tab="jingles">Разметка отбивок</button>
     <button data-tab="pads">Пэды</button>
+    <button data-tab="mixer">Микшер</button>
     <button data-tab="settings">Настройки</button>
+    <span class="grow"></span>
+    <span class="midi-dot" id="midi-dot" hidden title="MIDI-контроллер подключён">MIDI</span>
+    <button class="remote-btn" id="remote-btn" hidden title="QR-код и управление пультами">📱 Пульт <b id="remote-devices">0</b></button>
   </nav>
+  <dialog class="popup" id="remote-dlg">
+    <div class="popup-head"><h3>Пульт на телефоне</h3><span class="grow"></span><button class="btn" data-close>✕</button></div>
+    <div class="remote-grid">
+      <div class="qr">
+        <img id="qr" alt="QR">
+        <code id="qr-url"></code>
+        <p class="muted small" id="qr-other"></p>
+      </div>
+      <div>
+        <div class="row"><span id="remote-state">Пульты разрешены</span><span class="grow"></span>
+          <span class="pill" title="Устройства — разные телефоны, соединения — открытые вкладки пульта">вкладок: <b id="remotes">0</b></span></div>
+        <button class="btn wide" id="lock">Отключить пульты</button>
+        <div class="keys small">
+          <div><kbd>Пробел</kbd> отбивка</div><div><kbd>Esc</kbd> стоп отбивки</div>
+          <div><kbd>1–8</kbd> пэды</div><div><kbd>Q</kbd> <kbd>W</kbd> банк пэдов</div>
+          <div><kbd>P</kbd> фон play/pause</div><div><kbd>S</kbd> фон stop</div>
+          <div><kbd>N</kbd> следующий трек</div>
+        </div>
+      </div>
+    </div>
+  </dialog>
   <main>
     <section class="tab active" id="tab-live">
       <div id="live-off" class="start">
@@ -21,26 +46,7 @@
         <p class="muted">Браузер разрешает звук только после клика, поэтому эфир включается вручную.</p>
         <button id="go-live" class="go-live">▶ Начать эфир</button>
       </div>
-      <div id="live-on" class="live" hidden>
-        <aside class="side">
-          <div class="card qr">
-            <h3>Пульт на телефоне</h3>
-            <img id="qr" alt="QR">
-            <code id="qr-url"></code>
-            <p class="muted small" id="qr-other"></p>
-          </div>
-          <div class="card">
-            <div class="row"><span id="remote-state">Пульты разрешены</span><span class="grow"></span>
-              <span class="pill" title="Устройства — разные телефоны, соединения — открытые вкладки пульта">
-                устройств: <b id="remote-devices">0</b> · вкладок: <b id="remotes">0</b></span></div>
-            <button class="btn wide" id="lock">Отключить пульты</button>
-          </div>
-          <div class="card keys small">
-            <div><kbd>Пробел</kbd> отбивка</div><div><kbd>Esc</kbd> стоп отбивки</div>
-            <div><kbd>1–8</kbd> пэды</div><div><kbd>P</kbd> фон play/pause</div>
-            <div><kbd>S</kbd> фон stop</div><div><kbd>N</kbd> следующий трек</div>
-          </div>
-        </aside>
+      <div id="live-on" hidden>
         <div id="live-pad"></div>
       </div>
     </section>
@@ -67,17 +73,35 @@
           <h3>Пэды</h3>
           <p class="muted small">Перетащи на пэд mp3 или картинку прямо из проводника.
             На пульте показываются только пэды со звуком.</p>
+          <div class="tagbar" id="p-banks"></div>
           <div class="pads edit-grid" id="p-grid"></div>
         </div>
-        <div class="card" id="p-editor"><p class="muted">Выбери пэд, чтобы настроить название и обрезку.</p></div>
+        <div class="card" id="p-editor"><p class="muted">Выбери пэд, чтобы настроить название, обрезку, громкость и режим.</p></div>
       </div>
     </section>
 
+    <section class="tab" id="tab-mixer">
+      <div id="mixer"></div>
+    </section>
+
     <section class="tab" id="tab-settings">
-      <div class="card narrow">
-        <h3>Настройки</h3>
-        <div class="form" id="set-form"></div>
-        <p><button class="btn accent" id="set-save">💾 Сохранить</button> <span id="set-msg" class="muted"></span></p>
+      <div class="settings-grid">
+        <div class="card">
+          <h3>Настройки</h3>
+          <div class="form" id="set-form"></div>
+          <p><button class="btn accent" id="set-save">💾 Сохранить</button> <span id="set-msg" class="muted"></span></p>
+        </div>
+        <div class="card">
+          <h3>Ротация отбивок</h3>
+          <p class="muted small">Сначала играют треки, которые звучали реже всего, и ни один не повторяется раньше,
+            чем через 20 других. Счётчик общий для всех разделов и сам обнуляется через 8 часов без отбивок.</p>
+          <div id="rot-stats" class="small"></div>
+          <p><button class="btn" id="rot-reset">↺ Начать круг заново</button></p>
+        </div>
+        <div class="card wide-card">
+          <h3>MIDI-контроллер</h3>
+          <div id="midi"></div>
+        </div>
       </div>
     </section>
   </main>

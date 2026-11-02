@@ -18,21 +18,50 @@ const IMAGE_EXT = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif'];
 const SETTINGS_FILE = path.join(ROOT, 'settings.json');
 const PAD_COUNT = 8;
 
-// fadeIn/fadeOut — плавный вход и затухание пэда в секундах
-const emptyPad = (n) => ({ name: `Пэд ${n}`, file: null, image: null, start: 0, end: null, fadeIn: 0, fadeOut: 0 });
+// Пэд: file — из music/samples, image — из music/images; start/end — обрезка в секундах (end: null = до конца).
+// fadeIn/fadeOut — вход и затухание (сек), curveIn/curveOut — их форма, gain — усиление в дБ,
+// mode: oneshot — играет кусок целиком, loop — по кругу до повторного нажатия, hold — пока держишь.
+const emptyPad = (n) => ({
+  name: `Пэд ${n}`, file: null, image: null, start: 0, end: null,
+  fadeIn: 0, fadeOut: 0, curveIn: 'linear', curveOut: 'linear', gain: 0, mode: 'oneshot',
+});
+const fillPads = (pads = []) => Array.from({ length: PAD_COUNT }, (_, i) => ({ ...emptyPad(i + 1), ...pads[i] }));
+
+// Канальная линейка микшера (фон, отбивки, пэды, мастер). Описание — в public/mixer.js
+const defaultStrip = (id) => ({
+  eq: {
+    on: false,
+    bands: [
+      { type: 'highpass', freq: 30, q: 0.71, gain: 0, on: false },
+      { type: 'lowshelf', freq: 100, q: 0.71, gain: 0, on: true },
+      { type: 'peaking', freq: 300, q: 1, gain: 0, on: true },
+      { type: 'peaking', freq: 1000, q: 1, gain: 0, on: true },
+      { type: 'peaking', freq: 3500, q: 1, gain: 0, on: true },
+      { type: 'highshelf', freq: 10000, q: 0.71, gain: 0, on: true },
+      { type: 'lowpass', freq: 18000, q: 0.71, gain: 0, on: false },
+    ],
+  },
+  comp: { on: false, threshold: -18, ratio: 3, knee: 6, attack: 0.01, release: 0.25, makeup: 0 },
+  ...(id === 'master' ? { limiter: { on: true, ceiling: -1 } } : {}),
+});
+const MIXER_IDS = ['bg', 'jingles', 'pads', 'master'];
 
 const DEFAULT_SETTINGS = {
-  // file — из music/samples, image — из music/images; start/end — обрезка в секундах (end: null = до конца)
-  pads: Array.from({ length: PAD_COUNT }, (_, i) => emptyPad(i + 1)),
+  banks: [{ name: 'A', pads: fillPads() }], // банки по 8 пэдов
+  activeBank: 0,
   bgCrossfade: 6,     // сек: перекрытие фоновых треков
-  jingleDuration: 10, // сек: сколько играет отбивка от точки
+  jingleDuration: 10, // сек: сколько играет отбивка от точки (если у точки не задан свой конец)
   jingleFadeOut: 2,   // сек: затухание в конце отбивки и по «Стоп отбивки»
   bgStopFade: 3,      // сек: затухание фона по Pause/Stop
   duckLevel: 0.25,    // громкость фона, пока играет отбивка/пэд (0..1)
-  masterVolume: 1,    // общая громкость программы (0..1)
-  bgVolume: 0.8,      // громкость фоновой музыки (0..1)
+  masterVolume: 1,    // фейдеры каналов (0..1)
+  bgVolume: 0.8,
+  jingleVolume: 1,
+  padVolume: 1,
   jingleTags: [],     // разделы отбивок: «хаус», «рок»…
   showJingleTags: false, // показывать переключатель разделов под кнопкой «Отбивка»
+  mixer: Object.fromEntries(MIXER_IDS.map((id) => [id, defaultStrip(id)])),
+  midi: {},           // назначения MIDI: действие -> { type: 'note'|'cc', channel, number }
 };
 
 for (const c of CATEGORIES) fs.mkdirSync(path.join(MUSIC, c), { recursive: true });
@@ -40,13 +69,29 @@ for (const c of CATEGORIES) fs.mkdirSync(path.join(MUSIC, c), { recursive: true 
 function loadSettings() {
   let saved = {};
   try { saved = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')); } catch {}
-  // Переезд со старых 3 сэмплов на 8 пэдов
-  if (saved.samples && !saved.pads) {
+  // Переезды старых файлов: 3 сэмпла -> 8 пэдов -> банки пэдов
+  if (saved.samples && !saved.pads && !saved.banks) {
     saved.pads = saved.samples.map((s, i) => ({ ...emptyPad(i + 1), name: s.name, file: s.file }));
-    delete saved.samples;
   }
-  const pads = DEFAULT_SETTINGS.pads.map((p, i) => ({ ...p, ...(saved.pads || [])[i] }));
-  return { ...DEFAULT_SETTINGS, ...saved, pads };
+  if (saved.pads && !saved.banks) saved.banks = [{ name: 'A', pads: saved.pads }];
+  delete saved.samples;
+  delete saved.pads;
+  const banks = (saved.banks?.length ? saved.banks : DEFAULT_SETTINGS.banks)
+    .map((b, i) => ({ name: b.name || String.fromCharCode(65 + i), pads: fillPads(b.pads) }));
+  // Микшер: недостающие блоки берём из умолчаний (настройки могли сохраниться старой версией)
+  const mixer = Object.fromEntries(MIXER_IDS.map((id) => {
+    const def = defaultStrip(id);
+    const m = saved.mixer?.[id] || {};
+    return [id, { ...def, ...m, eq: { ...def.eq, ...m.eq }, comp: { ...def.comp, ...m.comp }, ...(def.limiter ? { limiter: { ...def.limiter, ...m.limiter } } : {}) }];
+  }));
+  const activeBank = Math.min(Math.max(0, saved.activeBank | 0), banks.length - 1);
+  return { ...DEFAULT_SETTINGS, ...saved, banks, activeBank, mixer };
+}
+
+// Через временный файл, как и разметку: сбой посреди записи не обнулит пэды и микшер
+function writeSettings(settings) {
+  fs.writeFileSync(SETTINGS_FILE + '.tmp', JSON.stringify(settings, null, 2));
+  fs.renameSync(SETTINGS_FILE + '.tmp', SETTINGS_FILE);
 }
 
 function listFiles(category, exts) {
@@ -81,6 +126,20 @@ function writeMeta(track, { cues, tags }) {
   if (tags.length) data.tags = tags;
   fs.writeFileSync(file + '.tmp', JSON.stringify(data, null, 2));
   fs.renameSync(file + '.tmp', file);
+}
+
+// Точка отбивки: просто время старта (число) или объект со своими параметрами:
+// { t, len, fadeIn, fadeOut, curveIn, curveOut } — всё, кроме t, необязательно (берётся из настроек)
+const cueTime = (c) => (typeof c === 'number' ? c : c.t);
+const CUE_NUM = ['len', 'fadeIn', 'fadeOut'];
+const CUE_STR = ['curveIn', 'curveOut'];
+function normalizeCue(c) {
+  if (typeof c === 'number' || typeof c === 'string') return Number(c) >= 0 ? Number(c) : null;
+  if (!c || !(Number(c.t) >= 0)) return null;
+  const out = { t: Number(c.t) };
+  for (const k of CUE_NUM) if (Number(c[k]) >= 0 && c[k] !== null && c[k] !== '') out[k] = Number(c[k]);
+  for (const k of CUE_STR) if (typeof c[k] === 'string') out[k] = c[k];
+  return Object.keys(out).length === 1 ? out.t : out; // без своих параметров — снова просто число
 }
 
 const jingleExists = (track) => fs.existsSync(path.join(MUSIC, 'jingles', track));
@@ -118,7 +177,7 @@ app.get('/api/library', (req, res) => {
 app.put('/api/cues/:track', (req, res) => {
   const track = path.basename(req.params.track);
   if (!jingleExists(track)) return res.status(404).json({ error: 'no track' });
-  const cues = (req.body.cues || []).map(Number).filter((n) => n >= 0).sort((a, b) => a - b);
+  const cues = (req.body.cues || []).map(normalizeCue).filter(Boolean).sort((a, b) => cueTime(a) - cueTime(b));
   writeMeta(track, { ...readMeta(track), cues }); // разделы трека сохраняются как были
   res.json({ cues });
 });
@@ -140,7 +199,7 @@ app.delete('/api/tags/:tag', (req, res) => {
   }
   const settings = loadSettings();
   settings.jingleTags = settings.jingleTags.filter((t) => t !== tag);
-  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+  writeSettings(settings);
   broadcast({ type: 'settings', settings });
   res.json(settings);
 });
@@ -160,8 +219,8 @@ app.post('/api/upload/:kind', express.raw({ type: '*/*', limit: '200mb' }), (req
 app.get('/api/settings', (req, res) => res.json(loadSettings()));
 
 app.put('/api/settings', (req, res) => {
-  const settings = { ...loadSettings(), ...req.body };
-  fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2));
+  writeSettings({ ...loadSettings(), ...req.body });
+  const settings = loadSettings(); // с дозаполненными пэдами и микшером
   broadcast({ type: 'settings', settings });
   res.json(settings);
 });

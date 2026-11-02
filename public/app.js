@@ -1,7 +1,11 @@
 import WaveSurfer from '/vendor/wavesurfer/wavesurfer.esm.js';
 import RegionsPlugin from '/vendor/wavesurfer/plugins/regions.esm.js';
-import { Engine } from '/engine.js';
+import { Engine, Rotation, cueOf } from '/engine.js';
 import { renderPad, connect, escapeHtml, padKey } from '/pad.js';
+import { CURVES, fitFades, loudness, dbToGain } from '/envelope.js';
+import { attachEnvelope, previewer } from '/wave-envelope.js';
+import { mountMixer } from '/mixer-ui.js';
+import { Midi, MIDI_ACTIONS, describe } from '/midi.js';
 
 const $ = (s) => document.querySelector(s);
 const api = async (url, body) =>
@@ -9,6 +13,10 @@ const api = async (url, body) =>
 const fmt = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, '0')}`;
 const AUDIO_RE = /\.(mp3|wav|ogg|m4a|aac|flac)$/i;
 const IMAGE_RE = /\.(png|jpe?g|webp|gif|avif)$/i;
+// Эталон для «Авто-громкости» пэда: средняя громкость дропов в отбивках, dBFS (см. loudness в envelope.js)
+const PAD_TARGET_DB = -9;
+const curveOptions = (value) => Object.entries(CURVES)
+  .map(([k, n]) => `<option value="${k}" ${k === (value || 'linear') ? 'selected' : ''}>${n}</option>`).join('');
 
 let settings = await api('/api/settings');
 let activeTab = 'live';
@@ -23,6 +31,7 @@ document.querySelectorAll('nav button[data-tab]').forEach((b) =>
     if (activeTab !== 'pads') pw?.ws.pause();
     if (activeTab === 'jingles') { $('#j-show-tags').checked = !!settings.showJingleTags; loadJingleList(); }
     if (activeTab === 'pads') renderPadGrid();
+    if (activeTab === 'mixer') mixer.show();
     if (activeTab === 'settings') renderSettings();
   }),
 );
@@ -84,7 +93,7 @@ function mountPad() {
 }
 
 $('#go-live').addEventListener('click', async () => {
-  engine = new Engine(() => settings, (st) => { showStatus?.(st); send?.(st); }, saveSettings);
+  engine = new Engine(() => settings, (st) => { showStatus?.(st); send?.(st); mixer.refresh(); }, saveSettings);
   send = connect('player', (msg) => {
     if (msg.type === 'connected') engine.emit(); // отдать пультам текущее состояние
     if (msg.type === 'replaced') return goOffline();
@@ -94,6 +103,7 @@ $('#go-live').addEventListener('click', async () => {
       const padsChanged = padKey(msg.settings) !== padKey(settings) || padKey(settings) !== mountedKey;
       settings = { ...msg.settings, ...pendingSave };
       if (padsChanged) { mountPad(); engine.preloadPads(); }
+      mixer.refresh();
     }
   });
   mountPad();
@@ -101,6 +111,7 @@ $('#go-live').addEventListener('click', async () => {
   engine.preloadPads();
   $('#live-off').hidden = true;
   $('#live-on').hidden = false;
+  $('#remote-btn').hidden = false;
   const qr = await api('/api/qr');
   if (qr.url) {
     $('#qr').src = qr.qr;
@@ -117,6 +128,8 @@ function goOffline() {
   send = null;
   $('#live-on').hidden = true;
   $('#live-off').hidden = false;
+  $('#remote-btn').hidden = true;
+  $('#remote-dlg').close();
   $('#live-off h1').textContent = 'Эфир перехвачен другой вкладкой';
   $('#live-off p').textContent = 'Звук теперь идёт из другой вкладки или окна. Эту можно закрыть.';
   // клон без старого обработчика «Начать эфир»
@@ -135,27 +148,46 @@ function showRemotes({ count, devices, accept }) {
   $('#lock').classList.toggle('locked', !accept);
   $('#remote-state').textContent = accept ? 'Пульты разрешены' : 'Пульты заблокированы';
   $('.qr').classList.toggle('locked', !accept);
+  $('#remote-btn').classList.toggle('locked', !accept);
 }
+// QR и управление пультами — во всплывающем окне из шапки, чтобы не занимали место в эфире
+$('#remote-btn').addEventListener('click', () => $('#remote-dlg').showModal());
+document.querySelectorAll('dialog').forEach((d) => d.addEventListener('click', (e) => { if (e.target === d) d.close(); }));
+document.querySelectorAll('[data-close]').forEach((b) => (b.onclick = () => b.closest('dialog').close()));
 $('#lock').addEventListener('click', () => send?.({ type: 'acceptRemotes', value: !acceptRemotes }));
 
+// цифра = порядковый номер видимого пэда в текущем банке
+function padByKey(key) {
+  const visible = engine.pads().map((p, i) => (p.file ? i : -1)).filter((i) => i >= 0);
+  return visible[Number(key) - 1];
+}
+
 document.addEventListener('keydown', (e) => {
-  if (e.target.matches('input, select, textarea')) return;
+  if (e.target.matches('input, select, textarea') || document.querySelector('dialog[open]')) return;
   if (activeTab === 'jingles') return editorKeys(e);
   if (activeTab !== 'live' || !engine) return;
   const map = { ' ': 'jingle', Escape: 'jingleStop' };
   const key = e.key.toLowerCase();
+  if (e.repeat) { if (map[e.key] || (e.key >= '1' && e.key <= '8')) e.preventDefault(); return; } // зажатая клавиша не «строчит»
   if (map[e.key]) engine.command({ cmd: map[e.key] });
   else if (['p', 'з'].includes(key)) engine.bgToggle();
   else if (['s', 'ы'].includes(key)) engine.bgStop();
   else if (['n', 'т'].includes(key)) engine.command({ cmd: 'bgNext' });
+  else if (['q', 'й'].includes(key)) engine.command({ cmd: 'bankPrev' });
+  else if (['w', 'ц'].includes(key)) engine.command({ cmd: 'bankNext' });
   else if (e.key >= '1' && e.key <= '8') {
-    // цифра = порядковый номер видимого пэда
-    const visible = settings.pads.map((p, i) => (p.file ? i : -1)).filter((i) => i >= 0);
-    const slot = visible[Number(e.key) - 1];
+    const slot = padByKey(e.key);
     if (slot === undefined) return;
-    engine.pad(slot);
+    engine.padDown(slot); // для обычных пэдов — то же, что нажатие
   } else return;
   e.preventDefault();
+});
+
+// Отпустили цифру — пэд в режиме «пока держишь» затухает
+document.addEventListener('keyup', (e) => {
+  if (activeTab !== 'live' || !engine || !(e.key >= '1' && e.key <= '8')) return;
+  const slot = padByKey(e.key);
+  if (slot !== undefined) engine.padUp(slot);
 });
 
 // ---------- Разметка отбивок ----------
@@ -249,14 +281,22 @@ $('#j-show-tags').addEventListener('change', async (e) => {
   settings = await api('/api/settings', { showJingleTags: e.target.checked });
 });
 
-// Ручное управление отменяет таймер «Прослушать N с» — иначе он поставит паузу посреди трека
-const cancelPreview = () => clearTimeout(previewTimer);
+// Ручное управление отменяет прослушку точки — иначе она поставит паузу посреди трека
+const cancelPreview = () => jPreview?.stop();
+
+// Точка отбивки в редакторе — всегда объект; свои параметры (len, fadeIn…) есть, только если их меняли.
+// Без своих параметров действуют общие из «Настроек».
+const cueDefaults = () => ({ len: settings.jingleDuration, fadeIn: 0.05, fadeOut: settings.jingleFadeOut, curveIn: 'linear', curveOut: 'linear' });
+const cueFull = (c) => ({ ...cueDefaults(), ...c });
+const isCustom = (c) => Object.keys(c).length > 1;
+
+let jPreview;
 
 function openJingle(name) {
   if (dirty && !confirm('Точки не сохранены. Перейти к другому треку?')) return;
   cancelPreview();
   current = name;
-  cues = [...(jingles.find((j) => j.name === name)?.cues || [])];
+  cues = (jingles.find((j) => j.name === name)?.cues || []).map((c) => ({ ...cueOf(c) }));
   dirty = false;
   jw?.ws.destroy();
   $('#j-editor').innerHTML = `
@@ -272,19 +312,28 @@ function openJingle(name) {
       <button class="btn" id="e-in" title="Приблизить">＋</button>
     </div>
     <div class="wave" id="waveform"></div>
-    <p class="hint">Колесо мыши над волной — зум вокруг курсора. Точки можно перетаскивать.</p>
+    <p class="hint">Колесо мыши над волной — зум. Область отбивки можно двигать целиком и тянуть за правый край (длина).
+      Белые ручки внутри — где кончается плавный вход и начинается затухание. Изменённые точки помечены «свои».</p>
     <div class="row"><button class="btn" id="e-save">💾 Сохранить точки</button> <span id="e-msg"></span></div>
     <div class="cues" id="e-cues"></div>`;
   regions = RegionsPlugin.create();
   jw = createWave($('#waveform'), '/media/jingles/' + encodeURIComponent(name), regions);
   const ws = jw.ws;
+  jPreview = previewer(ws);
   ws.on('decode', renderRegions);
   ws.on('timeupdate', (t) => ($('#e-time').textContent = fmt(t)));
-  regions.on('region-updated', () => {
-    cues = regions.getRegions().map((r) => r.start);
+  // пока тянут — перерисовываем дугу; отпустили — запоминаем
+  regions.on('region-update', (r) => r.env?.redraw());
+  regions.on('region-updated', (r) => {
+    const c = cues[r.cueIndex];
+    c.t = Math.round(r.start * 1000) / 1000;
+    const len = Math.round((r.end - r.start) * 100) / 100;
+    if (Math.abs(len - settings.jingleDuration) < 0.05) delete c.len;
+    else c.len = len;
     markDirty();
+    setTimeout(renderRegions); // пересоздаём области уже после события самого wavesurfer
   });
-  regions.on('region-clicked', (r, e) => { e.stopPropagation(); cancelPreview(); ws.setTime(r.start); ws.play(); });
+  regions.on('region-clicked', (r, e) => { e.stopPropagation(); previewCue(r.cueIndex); });
   ws.on('interaction', cancelPreview); // клик/перемотка по волне
   $('#e-play').onclick = () => { cancelPreview(); ws.playPause(); };
   $('#e-add').onclick = addCue;
@@ -298,25 +347,69 @@ function openJingle(name) {
 }
 
 function addCue() {
-  cues.push(jw.ws.getCurrentTime());
+  cues.push({ t: jw.ws.getCurrentTime() });
   markDirty();
   renderRegions();
 }
 
 function renderRegions() {
+  if (!jw.ws.getDuration()) return; // волна ещё не загрузилась — отрисуем по decode
   regions.clearRegions();
-  cues.sort((a, b) => a - b);
-  cues.forEach((c, i) => regions.addRegion({ start: c, color: '#ff6a2b', drag: true, content: `#${i + 1}` }));
+  cues.sort((a, b) => a.t - b.t);
+  cues.forEach((c, i) => {
+    const f = cueFull(c);
+    const r = regions.addRegion({
+      start: c.t,
+      end: Math.min(c.t + f.len, jw.ws.getDuration()),
+      color: 'rgba(255, 106, 43, .13)',
+      drag: true,
+      resize: true,
+      content: `#${i + 1}`,
+    });
+    r.cueIndex = i;
+    const env = { fadeIn: f.fadeIn, fadeOut: f.fadeOut, curveIn: f.curveIn, curveOut: f.curveOut };
+    r.env = attachEnvelope(r, env, (e) => {
+      setCueParam(c, 'fadeIn', e.fadeIn);
+      setCueParam(c, 'fadeOut', e.fadeOut);
+      markDirty();
+    });
+  });
   renderCueList();
+}
+
+// Значение, равное общему из настроек, не храним — тогда точка следует за настройками
+function setCueParam(c, key, value) {
+  if (value === cueDefaults()[key]) delete c[key];
+  else c[key] = value;
 }
 
 function renderCueList() {
   $('#e-cues').innerHTML = cues.length
-    ? cues.map((c, i) => `<div class="row cue"><b>#${i + 1}</b> <span class="mono">${fmt(c)}</span>
-        <button class="btn" data-play="${i}">▶ Прослушать ${settings.jingleDuration} с</button>
-        <button class="btn" data-del="${i}">✕</button></div>`).join('')
+    ? cues.map((c, i) => {
+        const f = cueFull(c);
+        return `<div class="row cue" data-i="${i}"><b>#${i + 1}</b> <span class="mono">${fmt(c.t)}</span>
+          <span class="muted small">${f.len.toFixed(1)} с · вход ${f.fadeIn.toFixed(2)} · затух. ${f.fadeOut.toFixed(2)}</span>
+          ${isCustom(c) ? '<span class="pill">свои</span>' : ''}
+          <span class="grow"></span>
+          <label class="small muted">вход <select data-curve="curveIn">${curveOptions(f.curveIn)}</select></label>
+          <label class="small muted">затух. <select data-curve="curveOut">${curveOptions(f.curveOut)}</select></label>
+          <button class="btn" data-play="${i}">▶</button>
+          ${isCustom(c) ? `<button class="btn" data-reset="${i}" title="Вернуть общие длину и затухания">↺</button>` : ''}
+          <button class="btn" data-del="${i}">✕</button></div>`;
+      }).join('')
     : '<p class="muted">Точек нет. Найди дроп, поставь курсор и нажми M.</p>';
-  $('#e-cues').querySelectorAll('[data-play]').forEach((b) => (b.onclick = () => previewCue(cues[b.dataset.play])));
+  $('#e-cues').querySelectorAll('[data-play]').forEach((b) => (b.onclick = () => previewCue(Number(b.dataset.play))));
+  $('#e-cues').querySelectorAll('[data-curve]').forEach((sel) => (sel.onchange = () => {
+    setCueParam(cues[sel.closest('[data-i]').dataset.i], sel.dataset.curve, sel.value);
+    markDirty();
+    renderRegions();
+  }));
+  $('#e-cues').querySelectorAll('[data-reset]').forEach((b) => (b.onclick = () => {
+    const i = Number(b.dataset.reset);
+    cues[i] = { t: cues[i].t };
+    markDirty();
+    renderRegions();
+  }));
   $('#e-cues').querySelectorAll('[data-del]').forEach((b) => (b.onclick = () => {
     cues.splice(Number(b.dataset.del), 1);
     markDirty();
@@ -324,12 +417,11 @@ function renderCueList() {
   }));
 }
 
-let previewTimer;
-function previewCue(t) {
-  clearTimeout(previewTimer);
-  jw.ws.setTime(t);
-  jw.ws.play();
-  previewTimer = setTimeout(() => jw.ws.pause(), settings.jingleDuration * 1000);
+// Прослушать точку так, как она прозвучит в эфире: с её длиной, входом и затуханием
+function previewCue(i) {
+  const f = cueFull(cues[i]);
+  const [fadeIn, fadeOut] = fitFades(f.len, f.fadeIn, f.fadeOut);
+  jPreview.play(cues[i].t, cues[i].t + f.len, { fadeIn, fadeOut, curveIn: f.curveIn, curveOut: f.curveOut });
 }
 
 function markDirty() {
@@ -340,7 +432,7 @@ function markDirty() {
 
 async function saveCues() {
   const res = await api('/api/cues/' + encodeURIComponent(current), { cues });
-  cues = res.cues;
+  cues = res.cues.map((c) => ({ ...cueOf(c) }));
   dirty = false;
   $('#e-msg').textContent = '✓ Сохранено';
   loadJingleList();
@@ -359,7 +451,14 @@ window.addEventListener('beforeunload', (e) => {
 });
 
 // ---------- Пэды ----------
-let selectedPad = null, pw, padRegion;
+let selectedPad = null, pw, padRegion, padEnv, padPreview;
+let editBank = settings.activeBank || 0; // какой банк открыт в редакторе (не обязательно тот, что в эфире)
+
+const emptyPad = (n) => ({
+  name: `Пэд ${n}`, file: null, image: null, start: 0, end: null,
+  fadeIn: 0, fadeOut: 0, curveIn: 'linear', curveOut: 'linear', gain: 0, mode: 'oneshot',
+});
+const bankPads = () => settings.banks[editBank].pads;
 
 async function upload(kind, file) {
   const res = await fetch('/api/upload/' + kind, {
@@ -372,13 +471,14 @@ async function upload(kind, file) {
 }
 
 async function savePads() {
-  settings = await api('/api/settings', { pads: settings.pads });
+  settings = await api('/api/settings', { banks: settings.banks });
+  editBank = Math.min(editBank, settings.banks.length - 1);
   if (engine) { mountPad(); engine.preloadPads(); }
 }
 
 // Перетащили файл на пэд: звук или картинка — определяем по расширению
 async function dropFiles(slot, files) {
-  const pad = settings.pads[slot];
+  const pad = bankPads()[slot];
   for (const f of files) {
     if (AUDIO_RE.test(f.name)) {
       pad.file = await upload('samples', f);
@@ -395,13 +495,53 @@ async function dropFiles(slot, files) {
   openPad(slot);
 }
 
+// Банки: переключение, добавление, переименование (двойной клик), удаление
+function renderBankBar() {
+  $('#p-banks').innerHTML = settings.banks.map((b, i) => `
+    <button class="tag ${i === editBank ? 'active' : ''}" data-b="${i}" title="Двойной клик — переименовать">
+      ${escapeHtml(b.name)}${settings.banks.length > 1 ? '<i data-del-bank title="Удалить банк">×</i>' : ''}</button>`).join('') +
+    '<button class="tag add" id="p-bank-add" title="Новый банк из 8 пустых пэдов">＋ банк</button>';
+  $('#p-banks').querySelectorAll('[data-b]').forEach((el) => {
+    const i = Number(el.dataset.b);
+    el.onclick = async (e) => {
+      if (e.target.matches('[data-del-bank]')) {
+        if (!confirm(`Удалить банк «${settings.banks[i].name}» со всеми его пэдами? Файлы останутся в music/.`)) return;
+        settings.banks.splice(i, 1);
+        editBank = Math.max(0, Math.min(editBank, settings.banks.length - 1));
+        await savePads();
+      } else editBank = i;
+      selectedPad = null;
+      pw?.ws.destroy();
+      pw = null;
+      renderPadGrid();
+      $('#p-editor').innerHTML = '<p class="muted">Выбери пэд, чтобы настроить название и обрезку.</p>';
+    };
+    el.ondblclick = async () => {
+      const name = (prompt('Название банка', settings.banks[i].name) || '').trim();
+      if (!name) return;
+      settings.banks[i].name = name.slice(0, 16);
+      await savePads();
+      renderPadGrid();
+    };
+  });
+  $('#p-bank-add').onclick = async () => {
+    settings.banks.push({ name: String.fromCharCode(65 + settings.banks.length), pads: Array.from({ length: 8 }, (_, i) => emptyPad(i + 1)) });
+    editBank = settings.banks.length - 1;
+    await savePads();
+    renderPadGrid();
+  };
+}
+
 function renderPadGrid() {
-  $('#p-grid').innerHTML = settings.pads.map((p, i) => `
+  editBank = Math.min(editBank, settings.banks.length - 1);
+  renderBankBar();
+  const badge = (p) => (p.gain ? ` · ${p.gain > 0 ? '+' : ''}${p.gain} дБ` : '') + ({ loop: ' · ⟳', hold: ' · ✋' }[p.mode] || '');
+  $('#p-grid').innerHTML = bankPads().map((p, i) => `
     <div class="pad-cell edit h${i} ${p.image ? 'has-img' : ''} ${p.file ? '' : 'unset'} ${i === selectedPad ? 'selected' : ''}"
          data-slot="${i}" ${p.image ? `style="--img:url('/media/images/${encodeURIComponent(p.image)}')"` : ''}>
       <span class="hue"></span>
       <span class="name">${escapeHtml(p.name)}</span>
-      <small class="sub">${p.file ? '♪' : 'перетащи звук'}${p.image ? ' · 🖼' : ''}</small>
+      <small class="sub">${p.file ? '♪' : 'перетащи звук'}${p.image ? ' · 🖼' : ''}${badge(p)}</small>
     </div>`).join('');
   $('#p-grid').querySelectorAll('[data-slot]').forEach((el) => {
     const slot = Number(el.dataset.slot);
@@ -418,14 +558,16 @@ function renderPadGrid() {
 
 function openPad(slot) {
   selectedPad = slot;
-  const p = settings.pads[slot];
+  const p = bankPads()[slot];
   pw?.ws.destroy();
   pw = null;
   padRegion = null;
+  padEnv = null;
   $('#p-grid').querySelectorAll('[data-slot]').forEach((el) => el.classList.toggle('selected', Number(el.dataset.slot) === slot));
+  const opt = (v, text) => `<option value="${v}" ${(p.mode || 'oneshot') === v ? 'selected' : ''}>${text}</option>`;
   $('#p-editor').innerHTML = `
     <div class="row">
-      <h2>Пэд ${slot + 1}</h2>
+      <h2>${escapeHtml(settings.banks[editBank].name)} · Пэд ${slot + 1}</h2>
       <input id="p-name" value="${escapeHtml(p.name)}" maxlength="24" placeholder="Название">
       <span class="grow"></span>
       <button class="btn" id="p-file">♪ Выбрать звук</button>
@@ -437,17 +579,29 @@ function openPad(slot) {
     ${p.file ? `
       <p class="muted mono">${escapeHtml(p.file)}</p>
       <div class="row">
-        <button class="btn accent" id="p-play">▶ Прослушать обрезку</button>
+        <button class="btn accent" id="p-play">▶ Прослушать</button>
         <button class="btn" id="p-stop">■</button>
         <span class="mono" id="p-range"></span>
         <span class="grow"></span>
         <button class="btn" id="p-out">−</button><button class="btn" id="p-fit">⤢</button><button class="btn" id="p-in">＋</button>
       </div>
       <div class="wave" id="p-wave"></div>
-      <p class="hint">Тяни края оранжевой области, чтобы задать начало и конец. Колесо мыши — зум.</p>
-      <div class="row fades">
-        <label>Плавный вход <input type="number" id="p-fadein" min="0" step="0.1" value="${p.fadeIn || 0}"> с</label>
-        <label>Затухание <input type="number" id="p-fadeout" min="0" step="0.1" value="${p.fadeOut || 0}"> с</label>
+      <p class="hint">Тяни края оранжевой области — начало и конец. Белые ручки внутри — длина входа и затухания. Колесо мыши — зум.</p>
+      <div class="pad-props">
+        <label>Режим <select id="p-mode">
+          ${opt('oneshot', 'Один раз — играет кусок целиком')}
+          ${opt('loop', 'По кругу — до повторного нажатия')}
+          ${opt('hold', 'Пока держишь — отпустил, и затух')}
+        </select></label>
+        <label>Вход <input type="number" id="p-fadein" min="0" step="0.1" value="${p.fadeIn || 0}"> с
+          <select id="p-curvein">${curveOptions(p.curveIn)}</select></label>
+        <label>Затухание <input type="number" id="p-fadeout" min="0" step="0.1" value="${p.fadeOut || 0}"> с
+          <select id="p-curveout">${curveOptions(p.curveOut)}</select></label>
+        <label class="gain">Громкость пэда
+          <input type="range" id="p-gain" min="-12" max="12" step="0.5" value="${p.gain || 0}">
+          <b class="mono" id="p-gain-val"></b>
+          <button class="btn" id="p-auto" title="Подогнать к громкости отбивок">Авто</button></label>
+        <span class="muted small" id="p-loud"></span>
       </div>`
     : '<p class="muted">Перетащи mp3 на пэд или нажми «Выбрать звук». Картинку — так же.</p>'}
     <div class="row"><button class="btn" id="p-save">💾 Сохранить пэд</button> <span id="p-msg"></span></div>`;
@@ -460,24 +614,30 @@ function openPad(slot) {
   };
   $('#p-file').onclick = () => pick('audio/*');
   $('#p-img').onclick = () => pick('image/*');
-  if ($('#p-noimg')) $('#p-noimg').onclick = async () => { p.image = null; await savePads(); renderPadGrid(); openPad(slot); };
+  if ($('#p-noimg')) $('#p-noimg').onclick = async () => { bankPads()[slot].image = null; await savePads(); renderPadGrid(); openPad(slot); };
   $('#p-clear').onclick = async () => {
     if (!confirm('Очистить пэд? Файлы останутся в папках music/.')) return;
-    settings.pads[slot] = { name: `Пэд ${slot + 1}`, file: null, image: null, start: 0, end: null, fadeIn: 0, fadeOut: 0 };
+    bankPads()[slot] = emptyPad(slot + 1);
     await savePads();
     renderPadGrid();
     openPad(slot);
   };
+  const unsaved = () => ($('#p-msg').innerHTML = '<span class="dirty">● не сохранено</span>');
   $('#p-save').onclick = async () => {
-    p.name = $('#p-name').value.trim() || `Пэд ${slot + 1}`;
+    const pad = bankPads()[slot];
+    pad.name = $('#p-name').value.trim() || `Пэд ${slot + 1}`;
     if ($('#p-fadein')) {
-      p.fadeIn = Math.max(0, Number($('#p-fadein').value) || 0);
-      p.fadeOut = Math.max(0, Number($('#p-fadeout').value) || 0);
+      pad.fadeIn = Math.max(0, Number($('#p-fadein').value) || 0);
+      pad.fadeOut = Math.max(0, Number($('#p-fadeout').value) || 0);
+      pad.curveIn = $('#p-curvein').value;
+      pad.curveOut = $('#p-curveout').value;
+      pad.mode = $('#p-mode').value;
+      pad.gain = Number($('#p-gain').value);
     }
     if (padRegion) {
-      p.start = Math.round(padRegion.start * 100) / 100;
+      pad.start = Math.round(padRegion.start * 100) / 100;
       // конец «до самого конца» храним как null
-      p.end = padRegion.end >= pw.ws.getDuration() - 0.05 ? null : Math.round(padRegion.end * 100) / 100;
+      pad.end = padRegion.end >= pw.ws.getDuration() - 0.05 ? null : Math.round(padRegion.end * 100) / 100;
     }
     await savePads();
     renderPadGrid();
@@ -487,35 +647,64 @@ function openPad(slot) {
 
   const regs = RegionsPlugin.create();
   pw = createWave($('#p-wave'), '/media/samples/' + encodeURIComponent(p.file), regs);
+  padPreview = previewer(pw.ws);
   const showRange = () => ($('#p-range').textContent = `${fmt(padRegion.start)} → ${fmt(padRegion.end)}  (${(padRegion.end - padRegion.start).toFixed(1)} с)`);
+  // Громкость обрезанного куска — для сравнения с эталоном отбивок
+  const showLoud = () => {
+    const buf = pw.ws.getDecodedData();
+    if (!buf || !padRegion) return null;
+    const l = loudness(buf, padRegion.start, padRegion.end);
+    const g = Number($('#p-gain').value);
+    $('#p-loud').textContent = Number.isFinite(l)
+      ? `Кусок: ${l.toFixed(1)} дБ, с усилением ${(l + g).toFixed(1)} дБ (отбивки в среднем ${PAD_TARGET_DB} дБ)`
+      : 'Кусок слишком тихий для измерения';
+    return l;
+  };
+  const showGain = () => {
+    const g = Number($('#p-gain').value);
+    $('#p-gain-val').textContent = (g > 0 ? '+' : '') + g.toFixed(1) + ' дБ';
+    showLoud();
+  };
+  const env = () => ({
+    fadeIn: Math.max(0, Number($('#p-fadein').value) || 0),
+    fadeOut: Math.max(0, Number($('#p-fadeout').value) || 0),
+    curveIn: $('#p-curvein').value,
+    curveOut: $('#p-curveout').value,
+  });
   pw.ws.on('decode', (duration) => {
     padRegion = regs.addRegion({ start: p.start || 0, end: p.end ?? duration, color: 'rgba(255,106,43,.22)', drag: true, resize: true });
+    padEnv = env();
+    // ручки на волне и цифры в полях — одно и то же, правятся с обеих сторон
+    padRegion.envView = attachEnvelope(padRegion, padEnv, (e) => {
+      $('#p-fadein').value = e.fadeIn;
+      $('#p-fadeout').value = e.fadeOut;
+      unsaved();
+    });
     showRange();
+    showGain();
   });
-  regs.on('region-updated', () => { showRange(); $('#p-msg').innerHTML = '<span class="dirty">● не сохранено</span>'; });
-  // Прослушка с теми же входом и затуханием, что будут в эфире
-  let fadeTimer;
-  const previewFades = () => {
-    clearInterval(fadeTimer);
-    const fi = Math.max(0, Number($('#p-fadein').value) || 0);
-    const fo = Math.max(0, Number($('#p-fadeout').value) || 0);
-    fadeTimer = setInterval(() => {
-      if (!pw || !pw.ws.isPlaying()) { clearInterval(fadeTimer); pw?.ws.setVolume(1); return; }
-      const now = pw.ws.getCurrentTime();
-      const vIn = fi ? (now - padRegion.start) / fi : 1;
-      const vOut = fo ? (padRegion.end - now) / fo : 1;
-      pw.ws.setVolume(Math.max(0, Math.min(1, vIn, vOut)));
-    }, 25);
+  regs.on('region-update', () => { padRegion?.envView.redraw(); showRange(); });
+  regs.on('region-updated', () => { showRange(); showLoud(); unsaved(); });
+  $('#p-editor').querySelectorAll('.pad-props input, .pad-props select').forEach((el) => (el.oninput = () => {
+    if (padEnv) { Object.assign(padEnv, env()); padRegion.envView.redraw(); }
+    if (el.id === 'p-gain') showGain();
+    unsaved();
+  }));
+  $('#p-auto').onclick = () => {
+    const l = showLoud();
+    if (!Number.isFinite(l)) return;
+    $('#p-gain').value = Math.max(-12, Math.min(12, Math.round((PAD_TARGET_DB - l) * 2) / 2));
+    showGain();
+    unsaved();
   };
+  // Прослушка с теми же входом, затуханием и громкостью, что будут в эфире
   $('#p-play').onclick = () => {
     if (!padRegion) return;
-    pw.ws.setVolume(Number($('#p-fadein').value) > 0 ? 0 : 1);
-    padRegion.play(true);
-    previewFades();
+    const e = env();
+    const [fadeIn, fadeOut] = fitFades(padRegion.end - padRegion.start, e.fadeIn, e.fadeOut);
+    padPreview.play(padRegion.start, padRegion.end, { ...e, fadeIn, fadeOut }, dbToGain(Number($('#p-gain').value)));
   };
-  $('#p-stop').onclick = () => pw.ws.pause();
-  $('#p-editor').querySelectorAll('.fades input').forEach((el) =>
-    (el.oninput = () => ($('#p-msg').innerHTML = '<span class="dirty">● не сохранено</span>')));
+  $('#p-stop').onclick = () => { pw.ws.pause(); padPreview.stop(); };
   $('#p-in').onclick = pw.zoomIn;
   $('#p-out').onclick = pw.zoomOut;
   $('#p-fit').onclick = pw.fit;
@@ -525,7 +714,7 @@ function openPad(slot) {
 const FIELDS = [
   ['bgCrossfade', 'Переход между фоновыми треками', 'сек'],
   ['bgStopFade', 'Затухание фона по Pause / Stop', 'сек'],
-  ['jingleDuration', 'Длительность отбивки', 'сек'],
+  ['jingleDuration', 'Длительность отбивки (если у точки не задана своя)', 'сек'],
   ['jingleFadeOut', 'Затухание отбивки (в конце и по «Стоп»)', 'сек'],
   ['duckLevel', 'Громкость фона во время отбивки (0–1)', ''],
 ];
@@ -535,6 +724,8 @@ function renderSettings() {
     <label for="f-${k}">${label}</label>
     <input id="f-${k}" type="number" min="0" step="${k === 'duckLevel' ? 0.05 : 0.5}" value="${settings[k]}">
     <span class="muted">${unit}</span>`).join('');
+  renderRotation();
+  renderMidi();
 }
 
 $('#set-save').addEventListener('click', async () => {
@@ -544,3 +735,121 @@ $('#set-save').addEventListener('click', async () => {
   settings = await api('/api/settings', patch);
   $('#set-msg').textContent = '✓ Сохранено';
 });
+
+// Ротация: сколько треков уже прозвучало в текущем круге
+const jingleRotation = () => engine?.jingleRotation || new Rotation('emp-rotation-jingles');
+
+async function renderRotation() {
+  const { jingles: all } = await api('/api/library');
+  const rot = jingleRotation();
+  const ready = all.filter((j) => j.cues.length);
+  const counts = ready.map((j) => rot.plays(j.name));
+  const total = counts.reduce((a, b) => a + b, 0);
+  const min = counts.length ? Math.min(...counts) : 0;
+  const left = counts.filter((c) => c === min).length;
+  $('#rot-stats').innerHTML = total
+    ? `Сыграно отбивок: <b>${total}</b>. Идёт круг №${min + 1}: в нём ещё не звучали <b>${left}</b> из ${ready.length} треков.`
+    : `Счётчик пуст: все ${ready.length} размеченных треков в равных условиях.`;
+}
+
+$('#rot-reset').addEventListener('click', () => {
+  if (!confirm('Обнулить счётчик? Все треки снова станут «ещё не звучавшими».')) return;
+  jingleRotation().reset();
+  renderRotation();
+});
+
+// ---------- MIDI ----------
+const midi = new Midi(() => settings.midi || {}, midiAction, () => { midiDot(); if (activeTab === 'settings') renderMidiState(); });
+let learning = null; // действие, которое сейчас ждёт контроллер
+
+function midiAction(action, ev) {
+  if (!engine) return;
+  const [kind, arg] = action.split(':');
+  if (kind === 'vol') return engine.setVolume(arg, ev.value);
+  if (kind === 'pad') return ev.on ? engine.padDown(Number(arg)) : engine.padUp(Number(arg));
+  if (!ev.on) return; // остальным кнопкам отпускание не важно
+  if (kind === 'bank') { if (Number(arg) < settings.banks.length) engine.setBank(Number(arg)); return; }
+  engine.command({ cmd: action });
+}
+
+function midiDot() {
+  $('#midi-dot').hidden = !midi.inputs().length;
+}
+
+async function startMidi() {
+  try {
+    await midi.start();
+    try { localStorage.setItem('emp-midi', '1'); } catch {}
+  } catch {
+    alert('Браузер не дал доступ к MIDI. Разреши его в настройках сайта (значок слева от адреса).');
+  }
+  renderMidi();
+}
+
+function renderMidi() {
+  if (!Midi.supported()) {
+    $('#midi').innerHTML = '<p class="muted">Этот браузер не умеет MIDI. Открой плеер в Chrome или Edge.</p>';
+    return;
+  }
+  if (!midi.access) {
+    $('#midi').innerHTML = `<p class="muted small">Подключи контроллер к ноутбуку по USB и нажми кнопку. Браузер один раз спросит разрешение.</p>
+      <button class="btn accent" id="midi-on">🎹 Включить MIDI</button>`;
+    $('#midi-on').onclick = startMidi;
+    return;
+  }
+  const b = settings.midi || {};
+  $('#midi').innerHTML = `
+    <div class="row small"><span id="midi-devices"></span><span class="grow"></span><span class="muted mono" id="midi-last"></span></div>
+    <p class="muted small">Нажми «Назначить», затем пэд, кнопку или крутилку на контроллере. Esc — отмена.</p>
+    <div class="midi-map">${MIDI_ACTIONS.map((a) => `
+      <div class="midi-row ${learning === a.id ? 'learning' : ''}" data-a="${a.id}">
+        <span>${a.name}${a.knob ? ' <small class="muted">(крутилка)</small>' : ''}</span>
+        <span class="mono small ${b[a.id] ? '' : 'muted'}">${learning === a.id ? 'жду контроллер…' : b[a.id] ? describe(b[a.id]) : '—'}</span>
+        <button class="btn" data-learn>Назначить</button>
+        ${b[a.id] ? '<button class="btn" data-unbind title="Убрать">✕</button>' : '<span></span>'}
+      </div>`).join('')}</div>`;
+  $('#midi').querySelectorAll('[data-learn]').forEach((btn) => (btn.onclick = () => learn(btn.closest('[data-a]').dataset.a)));
+  $('#midi').querySelectorAll('[data-unbind]').forEach((btn) => (btn.onclick = () => {
+    const map = { ...settings.midi };
+    delete map[btn.closest('[data-a]').dataset.a];
+    saveMidi(map);
+  }));
+  renderMidiState();
+}
+
+function renderMidiState() {
+  if (!$('#midi-devices')) return;
+  const inputs = midi.inputs();
+  $('#midi-devices').innerHTML = inputs.length ? '🟢 ' + inputs.map(escapeHtml).join(', ') : '⚪ Контроллер не найден — подключи по USB';
+  const l = midi.last;
+  // последнее сообщение: удобно проверить, что вообще шлёт контроллер
+  $('#midi-last').textContent = l ? `${l.device}: ${describe(l)}${l.type === 'cc' ? ' = ' + l.value : l.on ? ' ▼' : ' ▲'}` : '';
+}
+
+async function learn(action) {
+  learning = action;
+  renderMidi();
+  const binding = await midi.learn(action);
+  learning = null;
+  if (!binding) return renderMidi();
+  // одна кнопка — одно действие: убираем эту же привязку у других
+  const map = Object.fromEntries(Object.entries(settings.midi || {})
+    .filter(([, b]) => !(b.type === binding.type && b.channel === binding.channel && b.number === binding.number)));
+  map[action] = binding;
+  saveMidi(map);
+}
+
+async function saveMidi(map) {
+  settings = await api('/api/settings', { midi: map });
+  renderMidi();
+}
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && learning) { midi.cancelLearn(); learning = null; renderMidi(); }
+});
+
+// MIDI включали раньше — подключаемся сразу, чтобы контроллер работал без захода в настройки
+try { if (localStorage.getItem('emp-midi') === '1' && Midi.supported()) midi.start().then(midiDot).catch(() => {}); } catch {}
+
+// ---------- Микшер ----------
+const mixer = mountMixer($('#mixer'), { settings: () => settings, engine: () => engine, save: saveSettings });

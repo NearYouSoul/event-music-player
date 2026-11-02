@@ -1,19 +1,74 @@
 // Аудио-движок эфира. Весь звук играет здесь, в браузере ноутбука.
 //
-// Схема:  фон: deckA ─┐                отбивки: jdeck0/1 ─┐
-//                     ├─ bgBus ─ bgVol ─┐                  ├─ fgBus ─┐
-//         фон: deckB ─┘                 ├── master ─ колонки   пэды ─┘  │
-//                                       └───────────────────────────────┘
-// bgBus приглушается (ducking), пока играет отбивка или пэд.
-// bgVol — крутилка «Фон», master — крутилка «Master».
+// Схема:  фон: deckA ─┐
+//                     ├─ bgBus (ducking) ─ [линейка «Фон»] ─────┐
+//         фон: deckB ─┘                                         │
+//         отбивки: jdeck0/1 ─────────── [линейка «Отбивки»] ────┼─ [линейка «Master»] ─ колонки
+//         пэды: buffer ─ огибающая ─ гейн пэда ─ [линейка «Пэды»] ┘
+// Линейка = эквалайзер ─ компрессор ─ фейдер (см. mixer.js); на мастере ещё лимитер.
+// bgBus приглушается, пока играет отбивка или пэд.
+
+import { Strip, CHANNELS } from '/mixer.js';
+import { scheduleEnvelope, fadeOutNow, fitFades, dbToGain } from '/envelope.js';
 
 const enc = (s) => encodeURIComponent(s);
 const DOUBLE_TAP_MS = 450; // окно для «двойного тапа» по пэду
-const RECENT_JINGLES = 20; // отбивка не повторяется, пока не прозвучат столько других
+const RECENT = 20;         // трек не повторяется, пока не прозвучат столько других (во всех разделах)
+const ROTATION_TTL = 8 * 3600 * 1000; // через 8 ч без отбивок счётчик начинается заново (новый день)
 
-function pick(list, avoid) {
-  const pool = list.length > 1 ? list.filter((x) => x !== avoid) : list;
-  return pool[Math.floor(Math.random() * pool.length)];
+const randomOf = (list) => list[Math.floor(Math.random() * list.length)];
+
+// Честная ротация: сначала играют треки, которые звучали меньше всего,
+// и ни один не повторяется раньше, чем через RECENT других.
+// Счётчик общий для всех разделов: трек, сыгранный в #рок, уходит в конец очереди и в «случайных».
+// Хранится в браузере, поэтому переживает перезагрузку вкладки посреди турнира.
+export class Rotation {
+  constructor(key) {
+    this.key = key;
+    try { this.data = JSON.parse(localStorage.getItem(key)); } catch {}
+    if (!this.data || Date.now() - this.data.at > ROTATION_TTL) this.reset();
+  }
+
+  reset() {
+    this.data = { at: Date.now(), plays: {}, cues: {}, recent: [] };
+    this.save();
+  }
+
+  save() {
+    try { localStorage.setItem(this.key, JSON.stringify(this.data)); } catch {}
+  }
+
+  plays(name) { return this.data.plays[name] || 0; }
+
+  // names — из кого выбирать (текущий раздел)
+  pick(names) {
+    const window = Math.min(RECENT, names.length - 1);
+    const recent = window > 0 ? this.data.recent.slice(-window) : [];
+    let pool = names.filter((n) => !recent.includes(n));
+    if (!pool.length) pool = names;
+    const min = Math.min(...pool.map((n) => this.plays(n)));
+    return randomOf(pool.filter((n) => this.plays(n) === min));
+  }
+
+  // Точку внутри трека — тоже по кругу: сначала те, что звучали реже
+  pickCue(name, count) {
+    const used = this.data.cues[name] || [];
+    const idx = [...Array(count).keys()];
+    const min = Math.min(...idx.map((i) => used[i] || 0));
+    return randomOf(idx.filter((i) => (used[i] || 0) === min));
+  }
+
+  played(name, cue) {
+    const d = this.data;
+    d.at = Date.now();
+    d.plays[name] = this.plays(name) + 1;
+    d.recent = [...d.recent, name].slice(-RECENT * 3);
+    if (cue !== undefined) {
+      const used = (d.cues[name] ||= []);
+      used[cue] = (used[cue] || 0) + 1;
+    }
+    this.save();
+  }
 }
 
 function waitEvent(el, name) {
@@ -23,32 +78,34 @@ function waitEvent(el, name) {
   });
 }
 
+// Точка отбивки: число (старт) или объект со своими параметрами
+export const cueOf = (c) => (typeof c === 'number' ? { t: c } : c);
+
 export class Engine {
   constructor(getSettings, onStatus, saveSettings) {
     this.s = getSettings;
     this.onStatus = onStatus;
     this.save = saveSettings;
     this.bg = { state: 'stopped', track: null, gen: 0, crossfading: false };
-    this.fg = null; // { kind: 'jingle'|'pad', name, slot, dur, startedAt, stop(fadeSec) }
+    this.fg = null; // { kind: 'jingle'|'pad', name, bank, slot, dur, loop, startedAt, stop(fadeSec) }
     this.sampleCache = new Map();
     this.ticks = 0;
     this.jingleTag = null;     // выбранный раздел отбивок; null — «случайные» (все)
-    this.recentJingles = [];   // последние сыгранные отбивки — для памяти от повторов
     this.lastJingle = null;
+    this.bank = this.s().activeBank || 0;
+    this.jingleRotation = new Rotation('emp-rotation-jingles');
+    this.bgRotation = new Rotation('emp-rotation-bg');
   }
 
   init() {
     const ctx = (this.ctx = new AudioContext());
-    this.master = ctx.createGain();
-    this.master.gain.value = this.s().masterVolume;
-    this.master.connect(ctx.destination);
-    this.bgVol = ctx.createGain();
-    this.bgVol.gain.value = this.s().bgVolume;
-    this.bgVol.connect(this.master);
+    this.strips = Object.fromEntries(CHANNELS.map((c) => [c.id, new Strip(ctx, c.id)]));
+    for (const c of CHANNELS) if (c.id !== 'master') this.strips[c.id].output.connect(this.strips.master.input);
+    this.strips.master.output.connect(ctx.destination);
+    this.applyMixer();
+    for (const c of CHANNELS) this.strips[c.id].fader.gain.value = this.s()[c.volume];
     this.bgBus = ctx.createGain();
-    this.bgBus.connect(this.bgVol);
-    this.fgBus = ctx.createGain();
-    this.fgBus.connect(this.master);
+    this.bgBus.connect(this.strips.bg.input);
 
     const deck = (bus) => {
       const el = new Audio();
@@ -60,7 +117,7 @@ export class Engine {
     };
     this.decks = [deck(this.bgBus), deck(this.bgBus)];
     this.cur = 0;
-    this.jdecks = [deck(this.fgBus), deck(this.fgBus)];
+    this.jdecks = [deck(this.strips.jingles.input), deck(this.strips.jingles.input)];
     this.jcur = 0;
 
     for (const d of this.decks) {
@@ -77,6 +134,12 @@ export class Engine {
     this.emit();
   }
 
+  // Эквалайзеры, компрессоры и лимитер — из settings.mixer
+  applyMixer() {
+    const m = this.s().mixer;
+    for (const id in this.strips) this.strips[id].apply(m[id]);
+  }
+
   fade(param, to, sec) {
     const t = this.ctx.currentTime;
     param.cancelScheduledValues(t);
@@ -88,32 +151,46 @@ export class Engine {
     return (await fetch('/api/library')).json();
   }
 
+  pads(bank = this.bank) {
+    const { banks } = this.s();
+    if (this.bank >= banks.length) this.bank = 0; // активный банк удалили в редакторе
+    return banks[bank]?.pads || [];
+  }
+
   // Пульты сами анимируют прогресс от присланной позиции, поэтому
   // статус шлётся только при изменениях (плюс редкая синхронизация в tick)
   emit(extra = {}) {
     const el = this.decks?.[this.cur].el;
     const fg = this.fg;
+    const s = this.s();
     this.onStatus({
       type: 'status',
       bg: this.bg.state,
       bgTrack: this.bg.track,
       bgPos: el && this.bg.track ? el.currentTime : 0,
       bgDur: el && this.bg.track && el.duration ? el.duration : 0,
-      fg: fg ? { kind: fg.kind, name: fg.name, slot: fg.slot, dur: fg.dur, elapsed: (performance.now() - fg.startedAt) / 1000 } : null,
+      fg: fg ? { kind: fg.kind, name: fg.name, bank: fg.bank, slot: fg.slot, dur: fg.dur, loop: !!fg.loop, elapsed: (performance.now() - fg.startedAt) / 1000 } : null,
+      bank: this.bank,
       jingleTag: this.jingleTag,
       lastJingle: this.lastJingle,
-      masterVolume: this.s().masterVolume,
-      bgVolume: this.s().bgVolume,
+      volumes: Object.fromEntries(CHANNELS.map((c) => [c.id, s[c.volume]])),
       ...extra,
     });
   }
 
   setVolume(target, value) {
+    const ch = CHANNELS.find((c) => c.id === target);
+    if (!ch) return;
     const v = Math.min(1, Math.max(0, Number(value)));
-    if (target === 'master') this.fade(this.master.gain, v, 0.05);
-    else if (target === 'bg') this.fade(this.bgVol.gain, v, 0.05);
-    else return;
-    this.save({ [target === 'master' ? 'masterVolume' : 'bgVolume']: v });
+    this.fade(this.strips[target].fader.gain, v, 0.05);
+    this.save({ [ch.volume]: v });
+    this.emit();
+  }
+
+  setBank(i) {
+    const n = this.s().banks.length;
+    this.bank = ((i % n) + n) % n;
+    this.save({ activeBank: this.bank });
     this.emit();
   }
 
@@ -126,7 +203,8 @@ export class Engine {
       return false;
     }
     if (this.bg.state !== 'playing') return false; // пока грузился список, нажали Pause/Stop
-    const track = pick(background, this.bg.track);
+    const track = this.bgRotation.pick(background);
+    this.bgRotation.played(track);
     this.bg.track = track;
     d.el.src = '/media/background/' + enc(track);
     d.gain.gain.cancelScheduledValues(this.ctx.currentTime);
@@ -239,27 +317,28 @@ export class Engine {
     const tag = this.jingleTag;
     const ready = jingles.filter((j) => j.cues.length && (!tag || j.tags.includes(tag)));
     if (!ready.length) return this.emit({ error: tag ? `В разделе #${tag} нет размеченных отбивок` : 'Нет размеченных отбивок' });
-    // Память: трек не повторяется, пока не прозвучат 20 других (или все, если их меньше)
-    const window = Math.min(RECENT_JINGLES, ready.length - 1);
-    const recent = window > 0 ? this.recentJingles.slice(-window) : [];
-    const fresh = ready.filter((x) => !recent.includes(x.name));
-    const j = pick(fresh.length ? fresh : ready);
-    this.recentJingles = [...this.recentJingles, j.name].slice(-RECENT_JINGLES * 3);
-    this.lastJingle = j.name;
-    const cue = j.cues[Math.floor(Math.random() * j.cues.length)];
-    const { jingleDuration: dur, jingleFadeOut: fadeOut } = this.s();
+    const name = this.jingleRotation.pick(ready.map((j) => j.name));
+    const j = ready.find((x) => x.name === name);
+    const cueIdx = this.jingleRotation.pickCue(name, j.cues.length);
+    this.jingleRotation.played(name, cueIdx);
+    this.lastJingle = name;
+    const s = this.s();
+    const cue = cueOf(j.cues[cueIdx]);
+    const dur = cue.len ?? s.jingleDuration;
+    const [fadeIn, fadeOut] = fitFades(dur, cue.fadeIn ?? 0.05, cue.fadeOut ?? s.jingleFadeOut);
+    const env = { dur, fadeIn, fadeOut, curveIn: cue.curveIn, curveOut: cue.curveOut };
 
     const d = this.jdecks[(this.jcur = 1 - this.jcur)];
     let timer;
     const item = {
       kind: 'jingle',
-      name: j.name,
+      name,
       dur,
       startedAt: performance.now(),
       stop: (sec) => {
         clearTimeout(timer);
         if (d.owner !== item) return this.releaseForeground(item);
-        this.fade(d.gain.gain, 0, sec);
+        fadeOutNow(this.ctx, d.gain.gain, sec, cue.curveOut);
         timer = setTimeout(() => { if (d.owner === item) d.el.pause(); }, sec * 1000 + 50);
         this.releaseForeground(item);
       },
@@ -268,10 +347,10 @@ export class Engine {
     d.owner = item;
 
     d.el.pause();
-    d.el.src = '/media/jingles/' + enc(j.name);
+    d.el.src = '/media/jingles/' + enc(name);
     try {
       await waitEvent(d.el, 'loadedmetadata');
-      d.el.currentTime = cue;
+      d.el.currentTime = cue.t;
       await waitEvent(d.el, 'seeked');
     } catch {
       return this.releaseForeground(item);
@@ -281,11 +360,7 @@ export class Engine {
     g.cancelScheduledValues(this.ctx.currentTime);
     g.value = 0;
     await d.el.play().catch(() => {});
-    const t = this.ctx.currentTime;
-    g.setValueAtTime(0, t);
-    g.linearRampToValueAtTime(1, t + 0.05);
-    g.setValueAtTime(1, t + Math.max(dur - fadeOut, 0.05));
-    g.linearRampToValueAtTime(0, t + dur);
+    scheduleEnvelope(g, this.ctx.currentTime, env);
     item.startedAt = performance.now();
     this.emit();
     timer = setTimeout(() => {
@@ -307,67 +382,97 @@ export class Engine {
   }
 
   preloadPads() {
-    for (const p of this.s().pads) if (p.file) this.loadSample(p.file).catch(() => {});
+    for (const b of this.s().banks) for (const p of b.pads) if (p.file) this.loadSample(p.file).catch(() => {});
   }
 
+  isPlaying(slot, bank = this.bank) {
+    return this.fg && this.fg.kind === 'pad' && this.fg.slot === slot && this.fg.bank === bank;
+  }
+
+  // Нажатие пэда (oneshot и loop). Для hold — padDown/padUp.
   async pad(slot) {
-    const conf = this.s().pads[slot];
+    const conf = this.pads()[slot];
     if (!conf || !conf.file) return this.emit({ error: `На пэд ${slot + 1} не назначен звук` });
+    if (conf.mode === 'hold') return this.padDown(slot);
     // Повторное нажатие на играющий пэд — плавная остановка (затухание пэда, минимум 0.4 с)
-    if (this.fg && this.fg.kind === 'pad' && this.fg.slot === slot) {
-      this.padStopped = { slot, at: performance.now(), item: this.fg };
+    if (this.isPlaying(slot)) {
+      this.padStopped = { slot, bank: this.bank, at: performance.now(), item: this.fg };
       return this.fg.stop(Math.max(conf.fadeOut || 0, 0.4));
     }
     // Ещё одно нажатие сразу следом (двойной тап) — обрубаем затухание, без перезапуска
     const ps = this.padStopped;
     this.padStopped = null;
-    if (ps && ps.slot === slot && performance.now() - ps.at < DOUBLE_TAP_MS) return ps.item.stop(0.03);
+    if (ps && ps.slot === slot && ps.bank === this.bank && performance.now() - ps.at < DOUBLE_TAP_MS) return ps.item.stop(0.03);
+    return this.startPad(slot, conf);
+  }
+
+  padDown(slot) {
+    const conf = this.pads()[slot];
+    if (!conf || !conf.file) return;
+    if (conf.mode !== 'hold') return this.pad(slot);
+    if (!this.isPlaying(slot)) return this.startPad(slot, conf);
+  }
+
+  padUp(slot) {
+    const conf = this.pads()[slot];
+    if (!conf || conf.mode !== 'hold') return;
+    this.holdReleased = slot; // отпустили раньше, чем звук загрузился
+    if (this.isPlaying(slot)) this.fg.stop(Math.max(conf.fadeOut || 0, 0.05));
+  }
+
+  async startPad(slot, conf) {
+    const bank = this.bank;
+    this.holdReleased = null;
     let buffer;
     try {
       buffer = await this.loadSample(conf.file);
     } catch {
       return this.emit({ error: `Не удалось загрузить ${conf.file}` });
     }
+    if (conf.mode === 'hold' && this.holdReleased === slot) return;
     // Обрезка: играем только кусок [start, end]
     const from = Math.min(conf.start || 0, buffer.duration);
     const to = Math.min(conf.end ?? buffer.duration, buffer.duration);
     const dur = Math.max(to - from, 0.05);
+    const loop = conf.mode === 'loop';
     const src = this.ctx.createBufferSource();
-    const gain = this.ctx.createGain();
+    const env = this.ctx.createGain();
+    const trim = this.ctx.createGain();
+    trim.gain.value = dbToGain(conf.gain);
     src.buffer = buffer;
-    src.connect(gain).connect(this.fgBus);
+    src.connect(env).connect(trim).connect(this.strips.pads.input);
     const item = {
       kind: 'pad',
       name: conf.name,
+      bank,
       slot,
-      dur,
+      dur: loop ? 0 : dur,
+      loop,
       startedAt: performance.now(),
       stop: (sec) => {
-        this.fade(gain.gain, 0, sec);
+        fadeOutNow(this.ctx, env.gain, sec, conf.curveOut);
         try { src.stop(this.ctx.currentTime + sec + 0.05); } catch {}
         this.releaseForeground(item);
       },
     };
     src.onended = () => this.releaseForeground(item);
     this.claimForeground(item);
-    // Плавный вход и затухание из настроек пэда; минимум 20 мс, чтобы не щёлкало.
-    // Если вместе они длиннее куска — ужимаем пропорционально.
-    let fadeIn = Math.max(conf.fadeIn || 0, 0.02);
-    let fadeOut = Math.max(conf.fadeOut || 0, 0.02);
-    const k = Math.min(1, dur / (fadeIn + fadeOut));
-    fadeIn *= k;
-    fadeOut *= k;
+    const [fadeIn, fadeOut] = fitFades(dur, conf.fadeIn, conf.fadeOut);
     const t = this.ctx.currentTime;
-    gain.gain.setValueAtTime(0, t);
-    gain.gain.linearRampToValueAtTime(1, t + fadeIn);
-    gain.gain.setValueAtTime(1, t + dur - fadeOut);
-    gain.gain.linearRampToValueAtTime(0, t + dur);
-    src.start(t, from, dur);
+    scheduleEnvelope(env.gain, t, { dur, fadeIn, fadeOut, curveIn: conf.curveIn, curveOut: conf.curveOut, loop });
+    if (loop) {
+      src.loop = true;
+      src.loopStart = from;
+      src.loopEnd = to;
+      src.start(t, from);
+    } else {
+      src.start(t, from, dur);
+    }
   }
 
   // Эфир забрала другая вкладка: плавно глушим всё
   shutdown() {
-    this.fade(this.master.gain, 0, 0.5);
+    this.fade(this.strips.master.fader.gain, 0, 0.5);
     clearInterval(this.tickTimer);
     setTimeout(() => this.ctx.close(), 700);
   }
@@ -377,11 +482,17 @@ export class Engine {
       case 'bgPlay': return this.bgPlay();
       case 'bgPause': return this.bgPause();
       case 'bgStop': return this.bgStop();
+      case 'bgToggle': return this.bgToggle();
       case 'jingle': return this.jingle();
       case 'jingleStop': return this.stopJingle();
       case 'jingleTag': this.jingleTag = msg.tag || null; return this.emit();
       case 'bgNext': return this.bg.state === 'playing' && this.bgNext();
       case 'pad': return this.pad(Number(msg.slot));
+      case 'padDown': return this.padDown(Number(msg.slot));
+      case 'padUp': return this.padUp(Number(msg.slot));
+      case 'bank': return this.setBank(Number(msg.bank));
+      case 'bankNext': return this.setBank(this.bank + 1);
+      case 'bankPrev': return this.setBank(this.bank - 1);
       case 'volume': return this.setVolume(msg.target, msg.value);
     }
   }

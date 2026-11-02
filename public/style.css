@@ -147,13 +147,11 @@ main { padding: 20px; }
 }
 .go-live:active { transform: scale(.97); }
 
-/* --- Эфир на ноутбуке --- */
-.live { display: grid; grid-template-columns: 280px minmax(0, 1fr); gap: 20px; align-items: start; }
-.side { display: grid; gap: 14px; }
+/* --- QR пульта (всплывающее окно из шапки) --- */
 .qr img { width: 100%; background: #fff; border-radius: 12px; padding: 8px; display: block; }
 .qr code { display: block; margin-top: 10px; font-family: var(--mono); font-size: 12px; word-break: break-all; color: var(--cool); }
 .qr.locked img { opacity: .15; filter: grayscale(1); }
-.keys { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; color: var(--muted); }
+.keys { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; color: var(--muted); margin-top: 16px; }
 
 /* --- Панель эфира (общая) --- */
 #live-pad, #pad { position: relative; }
@@ -554,8 +552,13 @@ body.remote .knobs .cap { inset: 20px; }
 @media (max-width: 1100px) {
   .deck-grid { grid-template-columns: 1fr; }
 }
+/* На широком экране ноутбука пэды 4×2 — как на MPK Mini; места хватает */
+@media (min-width: 1100px) {
+  #live-pad .pads { grid-template-columns: repeat(4, 1fr); max-width: none; }
+  #live-pad .pad-cell .name { font-size: 20px; }
+}
 @media (max-width: 800px) {
-  .live, .editor, .pads-setup { grid-template-columns: 1fr; }
+  .editor, .pads-setup, .settings-grid, .remote-grid { grid-template-columns: 1fr; }
   main { padding: 12px; }
   nav { overflow-x: auto; }
 }
@@ -574,3 +577,151 @@ body.remote .knobs .cap { inset: 20px; }
   backdrop-filter: blur(6px);
 }
 .moved h2 { margin-bottom: 8px; }
+
+/* ===== Шапка: кнопка «Пульт» и индикатор MIDI ===== */
+nav .remote-btn {
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  color: var(--text);
+  border-radius: 99px;
+  padding: 6px 14px;
+}
+.remote-btn b { color: var(--ok); font-family: var(--mono); margin-left: 4px; }
+nav .remote-btn.locked { border-color: var(--stop); }
+.remote-btn.locked b { color: var(--stop); }
+.midi-dot { font-size: 11px; font-weight: 800; letter-spacing: .12em; color: var(--cool); padding: 4px 10px; border: 1px solid rgba(46, 230, 214, .4); border-radius: 99px; margin-right: 6px; }
+
+/* ===== Всплывающие окна (пульт, плагины) ===== */
+dialog.popup {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 18px;
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  color: var(--text);
+  box-shadow: 0 30px 80px rgba(0, 0, 0, .7);
+  max-width: min(960px, 94vw);
+  width: max-content;
+}
+dialog.popup::backdrop { background: rgba(4, 5, 8, .7); backdrop-filter: blur(4px); }
+.popup-head { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+.remote-grid { display: grid; grid-template-columns: 260px 320px; gap: 20px; align-items: start; }
+
+/* ===== Банки пэдов на панели эфира ===== */
+.banks { display: flex; gap: 6px; margin: -4px 0 12px; max-width: 520px; overflow-x: auto; scrollbar-width: none; }
+.banks button {
+  flex: 1;
+  min-width: 56px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: 10px;
+  padding: 8px 10px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  cursor: pointer;
+  position: relative;
+}
+.banks button.active { color: var(--text); border-color: rgba(255, 106, 43, .6); background: rgba(255, 106, 43, .12); }
+/* в этом банке сейчас играет пэд — точка, чтобы не потерять его после переключения */
+.banks button.playing::after { content: ""; position: absolute; top: 5px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--hot); box-shadow: 0 0 6px var(--hot); }
+.pad-cell .mode { position: absolute; top: 8px; right: 10px; font-style: normal; font-size: 14px; opacity: .85; text-shadow: 0 1px 4px #000; }
+.game-knobs { margin-top: 16px; max-width: 520px; }
+.knob.small .dial { width: 72px; height: 72px; }
+.knob.small .cap { inset: 13px; }
+.knob.small .fill { stroke: var(--hot); filter: drop-shadow(0 0 4px var(--hot)); }
+body.remote .knobs.game-knobs .dial { width: 72px; height: 72px; }
+body.remote .knobs.game-knobs .cap { inset: 13px; }
+body.remote .game-knobs { margin-top: 10px; }
+
+/* ===== Огибающая на волне: стили в wave-envelope.js (волна живёт в Shadow DOM) ===== */
+.cue select { padding: 4px 8px; font-size: 12px; }
+
+/* ===== Свойства пэда ===== */
+.pad-props { display: flex; flex-wrap: wrap; gap: 12px 22px; align-items: center; margin: 4px 0 14px; color: var(--muted); }
+.pad-props label { display: flex; gap: 6px; align-items: center; }
+.pad-props input[type=number] { width: 72px; }
+.pad-props select { padding: 6px 8px; }
+.pad-props .gain input { width: 160px; accent-color: var(--hot); }
+.pad-props .gain b { min-width: 64px; color: var(--text); }
+#p-loud { flex-basis: 100%; }
+
+/* ===== Микшер ===== */
+.mixer { display: flex; gap: 16px; flex-wrap: wrap; }
+.strip {
+  width: 150px;
+  background: linear-gradient(180deg, var(--panel-2), var(--panel));
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px 12px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .35);
+}
+.strip-name { font-weight: 800; letter-spacing: .14em; text-transform: uppercase; font-size: 12px; }
+.strip.bg .strip-name { color: var(--cool); }
+.strip.jingles .strip-name, .strip.pads .strip-name { color: var(--hot); }
+.strip.master { border-color: rgba(255, 106, 43, .4); }
+.slots { display: grid; gap: 6px; width: 100%; }
+.slot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border: 1px solid var(--line);
+  background: #0b0d13;
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+  color: var(--muted);
+}
+.slot i { width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+.slot.on { color: var(--text); }
+.slot.on i { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.slot:hover { border-color: #3a4052; }
+.fader-wrap { display: flex; gap: 14px; align-items: stretch; height: 260px; }
+.meter { position: relative; width: 12px; border-radius: 4px; background: #0b0d13; border: 1px solid var(--line); overflow: hidden; }
+.meter b { position: absolute; left: 0; right: 0; bottom: 0; background: linear-gradient(0deg, var(--ok) 0 160px, #ffd23b 220px, var(--stop) 256px); background-size: 100% 258px; background-position: bottom; }
+.meter.clip { border-color: var(--stop); }
+/* сколько давят компрессор/лимитер — полоса сверху вниз */
+.meter .gr { position: absolute; left: 0; right: 0; top: 0; background: rgba(124, 92, 255, .85); }
+.fader { writing-mode: vertical-lr; direction: rtl; width: 32px; height: 100%; accent-color: var(--hot); padding: 0; background: none; border: 0; cursor: ns-resize; }
+.strip-val { font-size: 12px; color: var(--muted); }
+.mixer-hint { max-width: 720px; margin-top: 16px; }
+
+/* ===== Окна плагинов ===== */
+.power { position: relative; width: 34px; height: 20px; cursor: pointer; flex: none; }
+.power input { position: absolute; opacity: 0; }
+.power span { position: absolute; inset: 0; border-radius: 99px; background: var(--line); transition: background .15s; }
+.power span::after { content: ""; position: absolute; left: 3px; top: 3px; width: 14px; height: 14px; border-radius: 50%; background: #fff; transition: transform .15s; }
+.power input:checked + span { background: var(--ok); }
+.power input:checked + span::after { transform: translateX(14px); }
+.eq-canvas { width: min(900px, 86vw); aspect-ratio: 900 / 320; background: #0b0d13; border: 1px solid var(--line); border-radius: 12px; display: block; cursor: crosshair; touch-action: none; }
+.bands { display: grid; gap: 6px; }
+.band { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.band .check { margin: 0; min-width: 44px; }
+.band select { padding: 5px 8px; width: 130px; }
+.band input[type=number] { width: 84px; padding: 5px 8px; }
+.band input:disabled { opacity: .35; }
+.comp { display: flex; gap: 20px; align-items: flex-start; flex-wrap: wrap; }
+.comp-canvas { width: 260px; height: 260px; background: #0b0d13; border: 1px solid var(--line); border-radius: 12px; }
+.params { display: grid; gap: 10px; min-width: 360px; }
+.param { display: grid; grid-template-columns: 170px 1fr 60px 30px; gap: 10px; align-items: center; color: var(--muted); font-size: 13px; }
+.param input { accent-color: var(--hot); padding: 0; }
+.param b { color: var(--text); text-align: right; }
+.gr-meter { display: grid; grid-template-columns: 170px 1fr 60px; gap: 10px; align-items: center; color: var(--muted); font-size: 13px; margin-top: 6px; }
+.gr-meter div { height: 8px; border-radius: 4px; background: #0b0d13; border: 1px solid var(--line); overflow: hidden; }
+.gr-meter div b { display: block; height: 100%; width: 0; background: var(--cool-2); }
+.gr-meter > b { color: var(--text); text-align: right; }
+
+/* ===== Настройки: ротация, MIDI ===== */
+.settings-grid { display: grid; grid-template-columns: minmax(0, 720px) minmax(280px, 420px); gap: 20px; align-items: start; }
+.settings-grid .wide-card { grid-column: 1 / -1; max-width: 1160px; }
+.midi-map { display: grid; grid-template-columns: repeat(auto-fill, minmax(520px, 1fr)); gap: 4px 20px; margin-top: 8px; }
+.midi-row { display: grid; grid-template-columns: 1fr 190px max-content 40px; gap: 8px; align-items: center; padding: 5px 8px; border-radius: 10px; }
+.midi-row:hover { background: var(--panel); }
+.midi-row .btn { padding: 5px 10px; font-size: 13px; }
+.midi-row.learning { background: rgba(46, 230, 214, .1); box-shadow: inset 0 0 0 1px var(--cool); }
+.midi-row.learning .mono { color: var(--cool); }
