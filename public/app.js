@@ -6,6 +6,7 @@ import { CURVES, fitFades, loudness, dbToGain } from '/envelope.js';
 import { attachEnvelope, previewer } from '/wave-envelope.js';
 import { mountMixer } from '/mixer-ui.js';
 import { Midi, MIDI_ACTIONS, describe } from '/midi.js';
+import * as outputs from '/outputs.js';
 
 const $ = (s) => document.querySelector(s);
 const api = async (url, body) =>
@@ -56,6 +57,7 @@ function createWave(container, url, regionsPlugin) {
     autoCenter: true, // при воспроизведении курсор держится по центру
     plugins: [regionsPlugin],
   });
+  outputs.route('cue', ws.getMediaElement()); // прослушка — на свой выход (Настройки → «Куда идёт звук»)
   let px = 0; // 0 = весь трек по ширине
 
   // После зума прокручиваем так, чтобы курсор оказался в центре экрана
@@ -116,6 +118,10 @@ $('#go-live').addEventListener('click', async () => {
   });
   mountPad();
   await engine.init();
+  // Эфир — на устройство из «Настроек»; если его нет, звук идёт на системный выход, и об этом видно сразу
+  outputs.route('air', engine.ctx).then((r) => {
+    if (r?.missing) engine.emit({ error: `Нет устройства «${r.label}» — эфир идёт на системный выход` });
+  });
   engine.preloadPads();
   $('#live-off').hidden = true;
   $('#live-on').hidden = false;
@@ -394,7 +400,7 @@ function openBgTrack(name) {
     </div>
     <div class="wave" id="b-wave"></div>
     <p class="hint">Клик по волне — перемотка, колесо мыши — зум, пробел — play/pause.
-      Прослушка звучит из колонок ноутбука мимо микшера — во время мероприятия слушай в наушниках.</p>`;
+      Прослушка идёт мимо микшера на выход «Прослушка» (Настройки → «Куда идёт звук»).</p>`;
   bw = createWave($('#b-wave'), '/media/background/' + encodeURIComponent(name), RegionsPlugin.create());
   const time = () => ($('#b-time').textContent = `${fmt(bw.ws.getCurrentTime())} / ${fmt(bw.ws.getDuration() || 0)}`);
   bw.ws.on('timeupdate', time);
@@ -1021,6 +1027,7 @@ function renderSettings() {
     <input id="f-${k}" type="number" min="0" step="${k === 'duckLevel' ? 0.05 : 0.5}" value="${settings[k]}">
     <span class="muted">${unit}</span>`).join('');
   renderRotation();
+  renderOutputs();
   renderMidi();
 }
 
@@ -1053,6 +1060,63 @@ $('#rot-reset').addEventListener('click', () => {
   jingleRotation().reset();
   renderRotation();
 });
+
+// ---------- Куда идёт звук ----------
+// Эфир и прослушка — на разные устройства (см. outputs.js). Выбор живёт в браузере этого компьютера.
+let outDevices = [];
+async function renderOutputs(ask = false) {
+  const box = $('#outs');
+  if (!outputs.canRoute) {
+    box.innerHTML = '<p class="dirty small">Этот браузер не умеет выбирать устройство вывода. Открой программу в Chrome или Edge.</p>';
+    return;
+  }
+  try {
+    outDevices = await outputs.devices(ask);
+  } catch {
+    box.innerHTML = '<p class="dirty small">Без разрешения браузер не показывает звуковые устройства. Нажми ещё раз и выбери «Разрешить».</p>' +
+      '<button class="btn" id="outs-ask">Показать устройства</button>';
+    $('#outs-ask').onclick = () => renderOutputs(true);
+    return;
+  }
+  const named = outDevices.some((d) => d.label);
+  box.innerHTML = Object.entries(outputs.ROLES).map(([role, name]) => {
+    const c = outputs.chosenOf(role);
+    const known = outDevices.some((d) => d.deviceId === c.id || (d.label && d.label === c.label));
+    return `<div class="out-row" data-role="${role}">
+      <b class="out-name out-${role}">${name}</b>
+      <select ${named ? '' : 'disabled'}>
+        <option value="">Системный выход по умолчанию</option>
+        ${outDevices.map((d, i) => `<option value="${i}" ${d.deviceId === c.id || (d.label && d.label === c.label) ? 'selected' : ''}>${escapeHtml(d.label || 'Устройство ' + (i + 1))}</option>`).join('')}
+        ${c.id && !known ? `<option selected disabled>Нет: ${escapeHtml(c.label)}</option>` : ''}
+      </select>
+      <button class="btn" data-beep title="Короткий сигнал на это устройство">♪ Проверить</button>
+    </div>`;
+  }).join('') +
+    (named ? '' : '<p class="muted small">Браузер прячет названия устройств, пока не дашь разрешение. Микрофон не используется — доступ сразу закрывается.</p><button class="btn" id="outs-ask">Показать устройства</button>') +
+    '<p class="muted small">Bluetooth-колонки запаздывают на 0.1–0.3 с — для эфира надёжнее провод или звуковая карта. ' +
+    'Если устройство отвалилось, звук уйдёт на системный выход, а когда вернётся — снова на него.</p>';
+  box.querySelectorAll('[data-role]').forEach((row) => {
+    const role = row.dataset.role;
+    row.querySelector('select').onchange = (e) => outputs.choose(role, outDevices[e.target.value] || null).then(() => renderOutputs());
+    row.querySelector('[data-beep]').onclick = () => outputs.beep(role);
+  });
+  if ($('#outs-ask')) $('#outs-ask').onclick = () => renderOutputs(true);
+}
+
+// Чип в шапке: куда сейчас идут эфир и прослушка. Красный — выбранного устройства нет.
+function showOutputs() {
+  const chip = $('#outs-chip');
+  if (!outputs.canRoute) return;
+  const part = (role, icon) => {
+    const st = outputs.state[role];
+    const label = st?.missing ? `нет «${st.label}»` : st?.label || 'системный';
+    return `<span class="${st?.missing ? 'bad' : ''}">${icon} ${escapeHtml(label)}</span>`;
+  };
+  chip.innerHTML = part('air', '📢') + part('cue', '🎧');
+  chip.hidden = !(outputs.state.air || outputs.state.cue);
+}
+outputs.onChange(() => { showOutputs(); if (activeTab === 'settings') renderOutputs(); });
+$('#outs-chip').onclick = () => document.querySelector('nav [data-tab=settings]').click();
 
 // ---------- MIDI ----------
 const midi = new Midi(() => settings.midi || {}, midiAction, () => { midiDot(); if (activeTab === 'settings') renderMidiState(); });

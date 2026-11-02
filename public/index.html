@@ -16,6 +16,7 @@
     <button data-tab="mixer">Микшер</button>
     <button data-tab="settings">Настройки</button>
     <span class="grow"></span>
+    <span class="outs-chip" id="outs-chip" hidden title="Куда идёт звук (Настройки → «Куда идёт звук»)"></span>
     <span class="on-air" id="on-air" hidden><i></i>В эфире</span>
     <span class="midi-dot" id="midi-dot" hidden title="MIDI-контроллер подключён">MIDI</span>
     <button class="remote-btn" id="remote-btn" hidden title="QR-код и управление пультами">📱 Пульт <b id="remote-devices">0</b></button>
@@ -108,6 +109,12 @@
           <h3>Настройки</h3>
           <div class="form" id="set-form"></div>
           <p><button class="btn accent" id="set-save">💾 Сохранить</button> <span id="set-msg" class="muted"></span></p>
+        </div>
+        <div class="card">
+          <h3>Куда идёт звук</h3>
+          <p class="muted small"><b>Эфир</b> — всё, что слышно на мероприятии: фон, отбивки, пэды (с телефона, клавиатуры, MIDI).
+            <b>Прослушка</b> — волны во вкладках «Фон», «Разметка отбивок», «Пэды», чтобы готовить треки в наушниках, пока идёт эфир.</p>
+          <div id="outs"></div>
         </div>
         <div class="card">
           <h3>Ротация отбивок</h3>

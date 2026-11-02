@@ -1,6 +1,7 @@
 // Огибающая громкости поверх области на волне (регион wavesurfer):
 // дуга входа и затухания + две ручки, которые тянутся мышкой.
 // Рисуется внутри region.element, поэтому сама следует за зумом, прокруткой и краями области.
+import { route } from '/outputs.js';
 import { envelopeAt } from '/envelope.js';
 
 const STEPS = 80;
@@ -82,7 +83,10 @@ export function attachEnvelope(region, env, onChange) {
 // каждые 20 мс ставится по огибающей (и гейну пэда). Так слышно ровно то, что будет в эфире.
 let ctx;
 export function previewer(ws) {
-  ctx ||= new AudioContext();
+  if (!ctx) {
+    ctx = new AudioContext();
+    route('cue', ctx); // прослушка редакторов — на выход «Прослушка»
+  }
   const gain = ctx.createGain();
   ctx.createMediaElementSource(ws.getMediaElement()).connect(gain).connect(ctx.destination);
   let timer;

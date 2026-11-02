@@ -957,6 +957,17 @@ dialog.plugin::backdrop { background: rgba(6, 8, 10, .72); backdrop-filter: blur
 .midi-row.learning { background: rgba(77, 168, 255, .1); box-shadow: inset 0 0 0 1px var(--cobalt); }
 .midi-row.learning .mono { color: var(--cobalt); }
 
+/* Куда идёт звук */
+.out-row { display: grid; grid-template-columns: 96px minmax(0, 1fr) max-content; gap: 10px; align-items: center; margin-bottom: 8px; }
+.out-row select { min-width: 0; }
+.out-air { color: var(--led); }
+.out-cue { color: var(--cobalt); }
+.outs-chip { display: flex; gap: 10px; margin-right: 14px; padding: 3px 10px; border-radius: 4px; background: #0f1216; box-shadow: inset 0 0 0 1px var(--steel-700); font-size: 12px; color: var(--muted); cursor: pointer; max-width: 380px; overflow: hidden; white-space: nowrap; }
+.outs-chip span { overflow: hidden; text-overflow: ellipsis; }
+.outs-chip .bad { color: #ffc1bc; }
+nav button, .on-air { white-space: nowrap; }
+@media (max-width: 1200px) { .outs-chip { max-width: 200px; } }
+
 /* ===== Пульт на телефоне ===== */
 body.remote {
   height: 100vh;
