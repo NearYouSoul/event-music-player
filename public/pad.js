@@ -265,6 +265,14 @@ const trackTitle = (f) => f.replace(/\.[^.]+$/, '').replace(/_/g, ' ');
 // Что из настроек видно на пульте: при изменении пульт перерисовывается
 export const padKey = (s) => JSON.stringify([s.banks, s.jingleTags, s.showJingleTags]);
 
+// Текстуры оформления из public/textures (если их туда положили): aluminum.jpg -> класс tex-aluminum на body
+export async function applyTextures() {
+  try {
+    const files = await (await fetch('/api/textures')).json();
+    for (const f of files) document.body.classList.add('tex-' + f.replace(/\.[^.]+$/, '').toLowerCase());
+  } catch {}
+}
+
 export function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }

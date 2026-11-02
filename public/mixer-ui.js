@@ -4,7 +4,7 @@
 import { CHANNELS, BAND_TYPES, hasGain } from '/mixer.js';
 
 const F_MIN = 20, F_MAX = 20000, DB = 18; // сетка эквалайзера: 20 Гц…20 кГц, ±18 дБ
-const BAND_COLORS = ['#7b8396', '#ff6a2b', '#ffb02e', '#2bd96b', '#2ee6d6', '#7c5cff', '#ff2e7e'];
+const BAND_COLORS = ['#8b94a1', '#ff5a4e', '#ffb020', '#36e07a', '#4da8ff', '#9b7bff', '#ff6fb5'];
 
 const fmtHz = (f) => (f >= 1000 ? (f / 1000).toFixed(f >= 10000 ? 0 : 1) + 'k' : Math.round(f)) + '';
 const fmtDb = (v) => (v > 0 ? '+' : '') + v.toFixed(1);
@@ -24,28 +24,64 @@ export function mountMixer(root, ctx) {
     render.status();
   };
 
+  // АЧХ эквалайзера на частотах freqs, дБ — по «немым» копиям фильтров (работает и без эфира)
+  function eqResponse(eq, freqs) {
+    const total = new Float32Array(freqs.length);
+    if (!eq.on) return total;
+    const mag = new Float32Array(freqs.length), ph = new Float32Array(freqs.length);
+    eq.bands.forEach((b, i) => {
+      if (!b.on) return;
+      const f = probe[i];
+      f.type = b.type;
+      f.frequency.value = b.freq;
+      f.Q.value = b.q;
+      f.gain.value = hasGain(b.type) ? b.gain : 0;
+      f.getFrequencyResponse(freqs, mag, ph);
+      for (let k = 0; k < freqs.length; k++) total[k] += 20 * Math.log10(mag[k] || 1e-9);
+    });
+    return total;
+  }
+
+  // Отметки на шкале фейдера: фейдер линейный (как крутилки на пульте), поэтому децибелы стоят неравномерно
+  const FADER_MARKS = [0, -3, -6, -10, -20];
+  // Шкала индикатора: −60…0 дБ
+  const METER_MARKS = [0, -6, -12, -24, -40, -60];
+  const meterPos = (db) => Math.max(0, Math.min(1, (db + 60) / 60));
+
   function render() {
     const s = ctx.settings();
     root.innerHTML = `
-      <div class="mixer">
-        ${CHANNELS.map((c) => `
-          <div class="strip ${c.id}" data-strip="${c.id}">
-            <div class="strip-name">${c.name}</div>
-            <div class="slots">
-              <button class="slot" data-open="eq">EQ<i></i></button>
-              <button class="slot" data-open="comp">Comp<i></i></button>
-              ${c.id === 'master' ? '<button class="slot" data-open="limiter">Limiter<i></i></button>' : ''}
-            </div>
-            <div class="fader-wrap">
-              <div class="meter"><b></b><span class="gr"></span></div>
-              <input type="range" class="fader" min="0" max="1" step="0.01" value="${s[c.volume]}">
-            </div>
-            <div class="strip-val mono"></div>
-          </div>`).join('')}
+      <div class="console">
+        <div class="console-plate">
+          <span class="screw"></span><b>Микшер эфира</b>
+          <span class="plate-note">Цепочка канала: эквалайзер → компрессор → фейдер. На Master в конце лимитер.</span>
+          <span class="screw"></span>
+        </div>
+        <div class="strips">
+          ${CHANNELS.map((c) => `
+            <div class="strip ch-${c.id}" data-strip="${c.id}">
+              <div class="scribble"><b>${c.name}</b><span class="scribble-db"></span></div>
+              <button class="eq-thumb" data-open="eq" title="Открыть эквалайзер"><canvas width="240" height="88"></canvas></button>
+              <div class="inserts">
+                <button class="key" data-open="eq"><i class="led"></i>EQ</button>
+                <button class="key" data-open="comp"><i class="led"></i>Comp</button>
+                ${c.id === 'master' ? '<button class="key" data-open="limiter"><i class="led"></i>Limit</button>' : ''}
+              </div>
+              <div class="bay">
+                <div class="fader-scale">${FADER_MARKS.map((d) => `<span style="bottom:${10 ** (d / 20) * 100}%">${d}</span>`).join('')}<span style="bottom:0">−∞</span></div>
+                <div class="fader-slot"><input type="range" class="fader" min="0" max="1" step="0.005" value="${s[c.volume]}" aria-label="Громкость: ${c.name}"></div>
+                <div class="meter">
+                  <div class="meter-bar"><b></b><i class="hold"></i></div>
+                  <div class="meter-bar"><b></b><i class="hold"></i></div>
+                  <div class="meter-gr" title="Подавление компрессора и лимитера"><b></b></div>
+                </div>
+                <div class="meter-scale">${METER_MARKS.map((d) => `<span style="bottom:${meterPos(d) * 100}%">${d}</span>`).join('')}</div>
+              </div>
+            </div>`).join('')}
+        </div>
       </div>
-      <p class="muted small mixer-hint">Цепочка каждого канала: эквалайзер → компрессор → фейдер, на Master ещё лимитер
-        (он не даёт звуку хрипеть, если пэдам добавили громкости). Фейдеры — те же крутилки, что на пульте.
-        Индикаторы уровня работают, когда идёт эфир.</p>`;
+      <p class="muted small mixer-hint">Фейдеры — те же крутилки, что на пульте. Индикаторы и спектр оживают, когда идёт эфир.
+        Плагин открывается кнопкой на канале или кликом по маленькому графику эквалайзера.</p>`;
     for (const c of CHANNELS) {
       const el = root.querySelector(`[data-strip="${c.id}"]`);
       const fader = el.querySelector('.fader');
@@ -56,24 +92,44 @@ export function mountMixer(root, ctx) {
         else ctx.save({ [c.volume]: v });
         render.status();
       };
+      // двойной клик по фейдеру — вернуть 0 дБ
+      fader.ondblclick = () => { fader.value = 1; fader.oninput(); };
       el.querySelectorAll('[data-open]').forEach((b) => (b.onclick = () => openPlugin(c.id, b.dataset.open)));
     }
     render.status();
   }
 
-  // Подсветка включённых плагинов и подписи фейдеров
+  // Мини-график эквалайзера на канале
+  const thumbFreqs = new Float32Array(240).map((_, i) => F_MIN * (F_MAX / F_MIN) ** (i / 240));
+  function drawThumb(cv, eq) {
+    const g = cv.getContext('2d');
+    const W = cv.width, H = cv.height;
+    g.clearRect(0, 0, W, H);
+    g.strokeStyle = 'rgba(160, 180, 200, .25)';
+    g.beginPath(); g.moveTo(0, H / 2); g.lineTo(W, H / 2); g.stroke();
+    const total = eqResponse(eq, thumbFreqs);
+    g.beginPath();
+    for (let x = 0; x < W; x++) g.lineTo(x, H / 2 - (Math.max(-DB, Math.min(DB, total[x])) / DB) * (H / 2 - 6));
+    g.strokeStyle = eq.on ? getComputedStyle(cv).color : 'rgba(170, 185, 200, .75)';
+    g.lineWidth = 3;
+    g.stroke();
+  }
+
+  // Подсветка включённых плагинов, подписи фейдеров, мини-графики EQ
   render.status = () => {
     const s = ctx.settings();
     for (const c of CHANNELS) {
       const el = root.querySelector(`[data-strip="${c.id}"]`);
       if (!el) continue;
       const m = mix()[c.id];
-      el.querySelector('[data-open=eq]').classList.toggle('on', m.eq.on);
-      el.querySelector('[data-open=comp]').classList.toggle('on', m.comp.on);
-      el.querySelector('[data-open=limiter]')?.classList.toggle('on', m.limiter.on);
+      el.querySelector('.key[data-open=eq]').classList.toggle('on', m.eq.on);
+      el.querySelector('.key[data-open=comp]').classList.toggle('on', m.comp.on);
+      el.querySelector('.key[data-open=limiter]')?.classList.toggle('on', m.limiter.on);
       const v = s[c.volume];
-      el.querySelector('.fader').value = v;
-      el.querySelector('.strip-val').textContent = v ? fmtDb(20 * Math.log10(v)) + ' дБ' : '−∞';
+      const fader = el.querySelector('.fader');
+      if (document.activeElement !== fader) fader.value = v;
+      el.querySelector('.scribble-db').textContent = v > 0.001 ? fmtDb(20 * Math.log10(v)) : '−∞';
+      drawThumb(el.querySelector('.eq-thumb canvas'), m.eq);
     }
   };
 
@@ -127,36 +183,21 @@ export function mountMixer(root, ctx) {
     const freqs = new Float32Array(W).map((_, i) => fOf(i));
     const handleY = (b) => yOf(hasGain(b.type) ? b.gain : 0);
 
-    function curve() {
-      const total = new Float32Array(W);
-      const mag = new Float32Array(W), ph = new Float32Array(W);
-      if (!eq().on) return total;
-      eq().bands.forEach((b, i) => {
-        if (!b.on) return;
-        const f = probe[i];
-        f.type = b.type;
-        f.frequency.value = b.freq;
-        f.Q.value = b.q;
-        f.gain.value = hasGain(b.type) ? b.gain : 0;
-        f.getFrequencyResponse(freqs, mag, ph);
-        for (let k = 0; k < W; k++) total[k] += 20 * Math.log10(mag[k] || 1e-9);
-      });
-      return total;
-    }
+    const curve = () => eqResponse(eq(), freqs);
 
     let spectrum = null;
     function draw() {
       g.clearRect(0, 0, W, H);
       // сетка
-      g.strokeStyle = '#1d2130';
-      g.fillStyle = '#4b5266';
+      g.strokeStyle = '#232830';
+      g.fillStyle = '#5d6672';
       g.font = '11px Consolas, monospace';
       for (const f of [50, 100, 200, 500, 1000, 2000, 5000, 10000]) {
         g.beginPath(); g.moveTo(xOf(f), 0); g.lineTo(xOf(f), H); g.stroke();
         g.fillText(fmtHz(f), xOf(f) + 3, H - 4);
       }
       for (const d of [-12, -6, 0, 6, 12]) {
-        g.strokeStyle = d ? '#1d2130' : '#2c3245';
+        g.strokeStyle = d ? '#232830' : '#2e343e';
         g.beginPath(); g.moveTo(0, yOf(d)); g.lineTo(W, yOf(d)); g.stroke();
         g.fillText(fmtDb(d), 4, yOf(d) - 3);
       }
@@ -174,14 +215,14 @@ export function mountMixer(root, ctx) {
           g.lineTo(x, H - v * (H - 20));
         }
         g.lineTo(W, H); g.lineTo(0, H);
-        g.fillStyle = 'rgba(46, 230, 214, .10)';
+        g.fillStyle = 'rgba(77, 168, 255, .12)';
         g.fill();
       }
       // АЧХ
       const total = curve();
       g.beginPath();
       for (let x = 0; x < W; x++) g.lineTo(x, yOf(Math.max(-DB, Math.min(DB, total[x]))));
-      g.strokeStyle = eq().on ? '#eef0f6' : '#4b5266';
+      g.strokeStyle = eq().on ? '#e9edf2' : '#5d6672';
       g.lineWidth = 2;
       g.stroke();
       g.lineWidth = 1;
@@ -189,9 +230,9 @@ export function mountMixer(root, ctx) {
       eq().bands.forEach((b, i) => {
         g.beginPath();
         g.arc(xOf(b.freq), handleY(b), 8, 0, Math.PI * 2);
-        g.fillStyle = b.on && eq().on ? BAND_COLORS[i] : '#2c3245';
+        g.fillStyle = b.on && eq().on ? BAND_COLORS[i] : '#2e343e';
         g.fill();
-        g.fillStyle = '#08090d';
+        g.fillStyle = '#14171b';
         g.font = 'bold 10px Segoe UI, sans-serif';
         g.fillText(i + 1, xOf(b.freq) - 3, handleY(b) + 4);
       });
@@ -285,7 +326,7 @@ export function mountMixer(root, ctx) {
         </div>
       </div>
       <p class="hint">Компрессор выравнивает громкость: всё, что громче порога, прижимается в заданное число раз.
-        Для эфира обычно хватает порога −18…−12 дБ и ratio 2–4.</p>`;
+        Для эфира обычно хватает порога −18…−12 дБ и ratio 2–4. Компенсацию добавляй руками: сам компрессор громкость не поднимает.</p>`;
     const cv = body.querySelector('canvas');
     const g = cv.getContext('2d');
     const S = cv.width;
@@ -299,16 +340,16 @@ export function mountMixer(root, ctx) {
     function draw() {
       g.clearRect(0, 0, S, S);
       const p = (db) => S - ((db + 60) / 60) * S;
-      g.strokeStyle = '#1d2130';
+      g.strokeStyle = '#232830';
       for (let d = -60; d <= 0; d += 12) {
         g.beginPath(); g.moveTo(S - p(d), 0); g.lineTo(S - p(d), S); g.stroke();
         g.beginPath(); g.moveTo(0, p(d)); g.lineTo(S, p(d)); g.stroke();
       }
-      g.strokeStyle = '#2c3245';
+      g.strokeStyle = '#2e343e';
       g.beginPath(); g.moveTo(0, S); g.lineTo(S, 0); g.stroke();
       g.beginPath();
       for (let x = 0; x <= S; x++) g.lineTo(x, p(out((x / S) * 60 - 60) + (c().on ? c().makeup : 0)));
-      g.strokeStyle = c().on ? '#ff6a2b' : '#4b5266';
+      g.strokeStyle = c().on ? '#ffb020' : '#5d6672';
       g.lineWidth = 2;
       g.stroke();
       g.lineWidth = 1;
@@ -334,7 +375,8 @@ export function mountMixer(root, ctx) {
         <b class="mono" id="lim-val"></b><small>дБ</small></label>
       <div class="gr-meter"><span>Подавление</span><div><b></b></div><b class="mono" id="gr-val"></b></div>
       <p class="hint">Лимитер стоит последним на Master: всё, что выше потолка, он прижимает, поэтому колонки
-        не хрипят даже при громких сэмплах. Держи включённым; −1 дБ — нормальный потолок.</p>`;
+        не хрипят даже при громких сэмплах. Он заглядывает на 5 мс вперёд, поэтому выше потолка не выходит ни один отсчёт.
+        Держи включённым; −1 дБ — нормальный потолок.</p>`;
     const inp = body.querySelector('#lim-ceil');
     const show = () => (body.querySelector('#lim-val').textContent = l().ceiling.toFixed(1));
     inp.oninput = () => { l().ceiling = Number(inp.value); show(); changed(); };
@@ -349,19 +391,28 @@ export function mountMixer(root, ctx) {
   }
 
   // ---------- Индикаторы ----------
+  const holds = {}; // пиковые отметки: держатся 1.2 с, потом медленно опускаются
   function loop() {
     cancelAnimationFrame(raf);
     const engine = ctx.engine();
     if (engine && root.offsetParent) {
+      const now = performance.now();
       for (const c of CHANNELS) {
-        const el = root.querySelector(`[data-strip="${c.id}"] .meter`);
+        const el = root.querySelector(`[data-strip="${c.id}"]`);
         const strip = engine.strips[c.id];
-        const db = strip.peak();
-        // шкала −60…0 дБ; выше −1 дБ — красный
-        el.querySelector('b').style.height = Math.max(0, Math.min(100, ((db + 60) / 60) * 100)) + '%';
-        el.classList.toggle('clip', db > -1);
+        strip.peaks().forEach((db, ch) => {
+          const bar = el.querySelectorAll('.meter-bar')[ch];
+          const pos = meterPos(db);
+          bar.querySelector('b').style.transform = `scaleY(${pos})`;
+          const key = c.id + ch;
+          const h = holds[key] || { pos: 0, at: 0 };
+          if (pos >= h.pos) holds[key] = { pos, at: now };
+          else if (now - h.at > 1200) holds[key] = { pos: Math.max(pos, h.pos - 0.01), at: h.at };
+          bar.querySelector('.hold').style.bottom = holds[key].pos * 100 + '%';
+          bar.classList.toggle('clip', db > -0.5);
+        });
         const r = strip.reduction();
-        el.querySelector('.gr').style.height = Math.min(100, (-(r.comp + r.limiter) / 20) * 100) + '%';
+        el.querySelector('.meter-gr b').style.transform = `scaleY(${Math.min(1, -(r.comp + r.limiter) / 20)})`;
       }
     }
     if (openWin && engine) openWin.draw();
@@ -371,4 +422,3 @@ export function mountMixer(root, ctx) {
   render();
   return { show: () => { render(); loop(); }, refresh: render.status };
 }
-

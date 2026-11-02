@@ -18,7 +18,8 @@
     </div>
   </div>
   <script type="module">
-    import { renderPad, connect, padKey } from '/pad.js';
+    import { renderPad, connect, padKey, applyTextures } from '/pad.js';
+    applyTextures();
     const conn = document.getElementById('conn');
     let settings = await (await fetch('/api/settings')).json();
     let lastStatus = { offline: true };

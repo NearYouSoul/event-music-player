@@ -1,7 +1,7 @@
 import WaveSurfer from '/vendor/wavesurfer/wavesurfer.esm.js';
 import RegionsPlugin from '/vendor/wavesurfer/plugins/regions.esm.js';
 import { Engine, Rotation, cueOf } from '/engine.js';
-import { renderPad, connect, escapeHtml, padKey } from '/pad.js';
+import { renderPad, connect, escapeHtml, padKey, applyTextures } from '/pad.js';
 import { CURVES, fitFades, loudness, dbToGain } from '/envelope.js';
 import { attachEnvelope, previewer } from '/wave-envelope.js';
 import { mountMixer } from '/mixer-ui.js';
@@ -19,6 +19,7 @@ const curveOptions = (value) => Object.entries(CURVES)
   .map(([k, n]) => `<option value="${k}" ${k === (value || 'linear') ? 'selected' : ''}>${n}</option>`).join('');
 
 let settings = await api('/api/settings');
+applyTextures();
 let activeTab = 'live';
 
 // ---------- Вкладки ----------
@@ -107,11 +108,12 @@ $('#go-live').addEventListener('click', async () => {
     }
   });
   mountPad();
-  engine.init();
+  await engine.init();
   engine.preloadPads();
   $('#live-off').hidden = true;
   $('#live-on').hidden = false;
   $('#remote-btn').hidden = false;
+  $('#on-air').hidden = false;
   const qr = await api('/api/qr');
   if (qr.url) {
     $('#qr').src = qr.qr;
@@ -129,6 +131,7 @@ function goOffline() {
   $('#live-on').hidden = true;
   $('#live-off').hidden = false;
   $('#remote-btn').hidden = true;
+  $('#on-air').hidden = true;
   $('#remote-dlg').close();
   $('#live-off h1').textContent = 'Эфир перехвачен другой вкладкой';
   $('#live-off p').textContent = 'Звук теперь идёт из другой вкладки или окна. Эту можно закрыть.';
@@ -532,16 +535,18 @@ function renderBankBar() {
   };
 }
 
-function renderPadGrid() {
+let knownSamples = null; // файлы в music/samples — чтобы пометить пэды, чей звук не перенесли
+async function renderPadGrid() {
   editBank = Math.min(editBank, settings.banks.length - 1);
   renderBankBar();
+  knownSamples = new Set((await api('/api/library')).samples);
   const badge = (p) => (p.gain ? ` · ${p.gain > 0 ? '+' : ''}${p.gain} дБ` : '') + ({ loop: ' · ⟳', hold: ' · ✋' }[p.mode] || '');
   $('#p-grid').innerHTML = bankPads().map((p, i) => `
-    <div class="pad-cell edit h${i} ${p.image ? 'has-img' : ''} ${p.file ? '' : 'unset'} ${i === selectedPad ? 'selected' : ''}"
+    <div class="pad-cell edit h${i} ${p.image ? 'has-img' : ''} ${p.file ? '' : 'unset'} ${p.file && !knownSamples.has(p.file) ? 'missing' : ''} ${i === selectedPad ? 'selected' : ''}"
          data-slot="${i}" ${p.image ? `style="--img:url('/media/images/${encodeURIComponent(p.image)}')"` : ''}>
       <span class="hue"></span>
       <span class="name">${escapeHtml(p.name)}</span>
-      <small class="sub">${p.file ? '♪' : 'перетащи звук'}${p.image ? ' · 🖼' : ''}${badge(p)}</small>
+      <small class="sub">${p.file ? (knownSamples.has(p.file) ? '♪' : '⚠ нет файла') : 'перетащи звук'}${p.image ? ' · 🖼' : ''}${badge(p)}</small>
     </div>`).join('');
   $('#p-grid').querySelectorAll('[data-slot]').forEach((el) => {
     const slot = Number(el.dataset.slot);
@@ -576,6 +581,12 @@ function openPad(slot) {
       <button class="btn stop" id="p-clear">Очистить пэд</button>
       <input type="file" id="p-input" hidden>
     </div>
+    <div class="pad-art ${p.image ? 'has' : ''}" id="p-art" title="Перетащи сюда картинку или нажми, чтобы выбрать"
+      ${p.image ? `style="background-image:url('/media/images/${encodeURIComponent(p.image)}')"` : ''}>
+      ${p.image ? '' : '<span>Картинка пэда<br><small>перетащи файл сюда</small></span>'}
+    </div>
+    <p class="muted small">Звук и картинка копируются в <span class="mono">music/samples</span> и <span class="mono">music/images</span>,
+      настройки пэда — в <span class="mono">music/settings.json</span>. Всё переезжает вместе с папкой music.</p>
     ${p.file ? `
       <p class="muted mono">${escapeHtml(p.file)}</p>
       <div class="row">
@@ -614,6 +625,15 @@ function openPad(slot) {
   };
   $('#p-file').onclick = () => pick('audio/*');
   $('#p-img').onclick = () => pick('image/*');
+  const art = $('#p-art');
+  art.onclick = () => pick('image/*');
+  art.ondragover = (e) => { e.preventDefault(); art.classList.add('drop'); };
+  art.ondragleave = () => art.classList.remove('drop');
+  art.ondrop = (e) => {
+    e.preventDefault();
+    art.classList.remove('drop');
+    dropFiles(slot, [...e.dataTransfer.files].filter((f) => IMAGE_RE.test(f.name))).catch((err) => alert(err.message));
+  };
   if ($('#p-noimg')) $('#p-noimg').onclick = async () => { bankPads()[slot].image = null; await savePads(); renderPadGrid(); openPad(slot); };
   $('#p-clear').onclick = async () => {
     if (!confirm('Очистить пэд? Файлы останутся в папках music/.')) return;

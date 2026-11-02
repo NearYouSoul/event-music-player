@@ -15,7 +15,11 @@ const MUSIC = path.join(ROOT, 'music');
 const CATEGORIES = ['background', 'jingles', 'samples', 'images'];
 const AUDIO_EXT = ['.mp3', '.wav', '.ogg', '.m4a', '.aac', '.flac'];
 const IMAGE_EXT = ['.png', '.jpg', '.jpeg', '.webp', '.gif', '.avif'];
-const SETTINGS_FILE = path.join(ROOT, 'settings.json');
+// Все данные пользователя — в одной папке music/: звуки, картинки, разметка и настройки.
+// Скопировал её на другой компьютер — переехало всё. Код (эта папка без music/) — отдельно.
+const SETTINGS_FILE = path.join(MUSIC, 'settings.json');
+const OLD_SETTINGS_FILE = path.join(ROOT, 'settings.json'); // где настройки лежали раньше
+const TEXTURES = path.join(ROOT, 'public', 'textures');
 const PAD_COUNT = 8;
 
 // Пэд: file — из music/samples, image — из music/images; start/end — обрезка в секундах (end: null = до конца).
@@ -65,6 +69,8 @@ const DEFAULT_SETTINGS = {
 };
 
 for (const c of CATEGORIES) fs.mkdirSync(path.join(MUSIC, c), { recursive: true });
+// Переезд: настройки из корня проекта — в music/
+if (fs.existsSync(OLD_SETTINGS_FILE) && !fs.existsSync(SETTINGS_FILE)) fs.renameSync(OLD_SETTINGS_FILE, SETTINGS_FILE);
 
 function loadSettings() {
   let saved = {};
@@ -172,6 +178,13 @@ app.get('/api/library', (req, res) => {
     samples: listAudio('samples'),
     images: listFiles('images', IMAGE_EXT),
   });
+});
+
+// Текстуры оформления, которые положили в public/textures (необязательные)
+app.get('/api/textures', (req, res) => {
+  let files = [];
+  try { files = fs.readdirSync(TEXTURES).filter((f) => IMAGE_EXT.includes(path.extname(f).toLowerCase())); } catch {}
+  res.json(files);
 });
 
 app.put('/api/cues/:track', (req, res) => {

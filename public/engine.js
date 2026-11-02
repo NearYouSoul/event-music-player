@@ -97,8 +97,10 @@ export class Engine {
     this.bgRotation = new Rotation('emp-rotation-bg');
   }
 
-  init() {
+  // AudioContext создаётся сразу (браузер разрешает звук только в обработчике клика), потом грузится worklet
+  async init() {
     const ctx = (this.ctx = new AudioContext());
+    await ctx.audioWorklet.addModule('/dynamics-worklet.js');
     this.strips = Object.fromEntries(CHANNELS.map((c) => [c.id, new Strip(ctx, c.id)]));
     for (const c of CHANNELS) if (c.id !== 'master') this.strips[c.id].output.connect(this.strips.master.input);
     this.strips.master.output.connect(ctx.destination);

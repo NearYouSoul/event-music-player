@@ -1,8 +1,9 @@
 // Канальная линейка микшера — как в DAW:
-//   вход ─ эквалайзер (до 7 полос) ─ компрессор ─ make-up ─ [лимитер, только мастер] ─ фейдер ─ выход
-// Всё на встроенных узлах Web Audio: BiquadFilterNode — те же «RBJ-биквады», что в большинстве
-// плагинов-эквалайзеров; DynamicsCompressorNode — компрессор с собственным look-ahead.
-// Выключенные блоки из цепочки выкидываются целиком, а не просто «обнуляются».
+//   вход ─ эквалайзер (7 полос) ─ компрессор ─ [лимитер, только Master] ─ фейдер ─ выход
+// Эквалайзер — BiquadFilterNode (те же «RBJ-биквады», что в большинстве плагинов-эквалайзеров).
+// Компрессор и лимитер — свои, в dynamics-worklet.js (предсказуемее встроенного DynamicsCompressor).
+// Схема собрана один раз и больше не пересоединяется: выключение блока — плавный переход
+// между обработанным и чистым звуком, поэтому щелчков при переключении в эфире нет.
 
 export const CHANNELS = [
   { id: 'bg', name: 'Фон', volume: 'bgVolume' },
@@ -27,89 +28,77 @@ export class Strip {
     this.ctx = ctx;
     this.id = id;
     this.input = ctx.createGain();
-    this.bands = [];
-    this.comp = ctx.createDynamicsCompressor();
-    this.makeup = ctx.createGain();
-    this.limiter = id === 'master' ? ctx.createDynamicsCompressor() : null;
+    // EQ: вход делится на «обработанный» (через полосы) и «чистый»; включение — перекрёстный фейд
+    this.bands = Array.from({ length: 7 }, () => ctx.createBiquadFilter());
+    this.eqWet = ctx.createGain();
+    this.eqDry = ctx.createGain();
+    this.eqOut = ctx.createGain();
+    this.eqWet.gain.value = 0; // до первых настроек — чистый звук
+    this.bands.reduce((a, b) => (a.connect(b), b), this.input).connect(this.eqWet).connect(this.eqOut);
+    this.input.connect(this.eqDry).connect(this.eqOut);
+    const dyn = (mode) => {
+      const node = new AudioWorkletNode(ctx, 'dynamics', {
+        processorOptions: { mode }, outputChannelCount: [2], channelCount: 2, channelCountMode: 'explicit',
+      });
+      node.gr = 0;
+      node.port.onmessage = (e) => (node.gr = e.data);
+      return node;
+    };
+    this.comp = dyn('comp');
+    this.limiter = id === 'master' ? dyn('limit') : null;
     this.fader = ctx.createGain();
+    let last = this.eqOut.connect(this.comp);
+    if (this.limiter) last = last.connect(this.limiter);
+    last.connect(this.fader);
+    this.output = this.fader;
+    // спектр (окно эквалайзера) и стерео-индикатор после фейдера
     this.analyser = ctx.createAnalyser();
     this.analyser.fftSize = 4096;
     this.analyser.smoothingTimeConstant = 0.75;
     this.fader.connect(this.analyser);
-    this.output = this.fader;
-    this.wiring = null;
-    this.timeData = new Float32Array(this.analyser.fftSize);
+    const split = ctx.createChannelSplitter(2);
+    this.fader.connect(split);
+    this.meters = [0, 1].map((ch) => {
+      const a = ctx.createAnalyser();
+      a.fftSize = 1024;
+      split.connect(a, ch);
+      return a;
+    });
+    this.timeData = new Float32Array(1024);
   }
 
   // conf — settings.mixer[id]
   apply(conf) {
-    const { ctx } = this;
-    const bands = conf.eq.bands;
-    while (this.bands.length < bands.length) this.bands.push(ctx.createBiquadFilter());
-    bands.forEach((b, i) => {
+    const t = this.ctx.currentTime;
+    const smooth = (param, v) => param.setTargetAtTime(v, t, 0.015);
+    const nyq = this.ctx.sampleRate / 2;
+    conf.eq.bands.forEach((b, i) => {
       const f = this.bands[i];
-      f.type = b.type;
-      const t = ctx.currentTime;
-      f.frequency.setTargetAtTime(b.freq, t, 0.02);
-      f.Q.setTargetAtTime(b.q, t, 0.02);
-      f.gain.setTargetAtTime(hasGain(b.type) ? b.gain : 0, t, 0.02);
+      if (f.type !== b.type) f.type = b.type;
+      // выключенная полоса не вынимается из цепочки, а становится прозрачной — плавно, без щелчка
+      const off = !b.on;
+      smooth(f.frequency, off && b.type === 'highpass' ? 10 : off && b.type === 'lowpass' ? Math.min(22000, nyq * 0.92) : b.freq);
+      smooth(f.Q, off && b.type === 'notch' ? 1000 : b.q);
+      smooth(f.gain, off || !hasGain(b.type) ? 0 : b.gain);
     });
-    const c = conf.comp;
-    this.comp.threshold.value = c.threshold;
-    this.comp.ratio.value = c.ratio;
-    this.comp.knee.value = c.knee;
-    this.comp.attack.value = c.attack;
-    this.comp.release.value = c.release;
-    this.makeup.gain.setTargetAtTime(c.on ? 10 ** (c.makeup / 20) : 1, ctx.currentTime, 0.02);
-    if (this.limiter) {
-      // лимитер: максимальное сжатие, мгновенная атака, без «колена»
-      this.limiter.threshold.value = conf.limiter.ceiling;
-      this.limiter.ratio.value = 20;
-      this.limiter.knee.value = 0;
-      this.limiter.attack.value = 0.001;
-      this.limiter.release.value = 0.1;
-    }
-    this.rewire(conf);
+    smooth(this.eqWet.gain, conf.eq.on ? 1 : 0);
+    smooth(this.eqDry.gain, conf.eq.on ? 0 : 1);
+    this.comp.port.postMessage(conf.comp);
+    if (this.limiter) this.limiter.port.postMessage(conf.limiter);
   }
 
-  // Перестраиваем цепочку, только если включились/выключились блоки
-  rewire(conf) {
-    const chain = [this.input];
-    if (conf.eq.on) conf.eq.bands.forEach((b, i) => b.on && chain.push(this.bands[i]));
-    if (conf.comp.on) chain.push(this.comp, this.makeup);
-    if (this.limiter && conf.limiter.on) chain.push(this.limiter);
-    chain.push(this.fader);
-    const key = chain.map((n) => [this.input, ...this.bands, this.comp, this.makeup, this.limiter, this.fader].indexOf(n)).join();
-    if (key === this.wiring) return;
-    this.wiring = key;
-    for (const n of [this.input, ...this.bands, this.comp, this.makeup, this.limiter]) n?.disconnect();
-    for (let i = 0; i < chain.length - 1; i++) chain[i].connect(chain[i + 1]);
-  }
-
-  // Пиковый уровень после фейдера, дБ
-  peak() {
-    this.analyser.getFloatTimeDomainData(this.timeData);
-    let m = 0;
-    for (const v of this.timeData) m = Math.max(m, Math.abs(v));
-    return m ? 20 * Math.log10(m) : -Infinity;
+  // Пиковый уровень левого и правого канала после фейдера, дБ
+  peaks() {
+    return this.meters.map((a) => {
+      a.getFloatTimeDomainData(this.timeData);
+      let m = 0;
+      for (const v of this.timeData) m = Math.max(m, Math.abs(v));
+      return m ? 20 * Math.log10(m) : -Infinity;
+    });
   }
 
   // Насколько сейчас давят компрессор и лимитер, дБ (≤ 0)
   reduction() {
-    return { comp: this.comp.reduction, limiter: this.limiter ? this.limiter.reduction : 0 };
-  }
-
-  // АЧХ эквалайзера на заданных частотах, дБ — для рисования кривой
-  response(freqs, conf) {
-    const total = new Float32Array(freqs.length);
-    if (!conf.eq.on) return total;
-    const mag = new Float32Array(freqs.length);
-    const phase = new Float32Array(freqs.length);
-    conf.eq.bands.forEach((b, i) => {
-      if (!b.on) return;
-      this.bands[i].getFrequencyResponse(freqs, mag, phase);
-      for (let k = 0; k < freqs.length; k++) total[k] += 20 * Math.log10(mag[k] || 1e-9);
-    });
-    return total;
+    return { comp: this.comp.gr, limiter: this.limiter ? this.limiter.gr : 0 };
   }
 }
