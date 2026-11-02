@@ -115,7 +115,7 @@ nav {
 }
 .brand { font-size: 17px; font-weight: 700; font-stretch: 87.5%; margin-right: 22px; display: flex; align-items: center; gap: 8px; }
 .brand b { font-weight: 300; color: var(--muted); }
-.brand i { width: 14px; height: 14px; border-radius: 3px; background: conic-gradient(var(--cobalt) 0 25%, var(--amber) 0 50%, var(--coral) 0 75%, var(--ink) 0); box-shadow: 0 0 0 2px #0b0d10; }
+.brand img { width: 22px; height: 22px; display: block; }
 nav button {
   border: 0;
   background: none;
