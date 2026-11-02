@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#08090d">
+  <title>Пульт</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body class="remote">
+  <div id="conn" class="conn">Подключение…</div>
+  <div id="pad"></div>
+  <div id="moved" class="moved" hidden>
+    <div>
+      <h2>Пульт открыт в другой вкладке</h2>
+      <p class="muted">Эта вкладка отключена, чтобы не двоить управление.</p>
+      <button class="btn wide" onclick="location.reload()">↻ Вернуть пульт сюда</button>
+    </div>
+  </div>
+  <script type="module">
+    import { renderPad, connect, padKey } from '/pad.js';
+    const conn = document.getElementById('conn');
+    let settings = await (await fetch('/api/settings')).json();
+    let lastStatus = { offline: true };
+    let rejected = false;
+    let showStatus;
+
+    const setConn = (cls, text) => { conn.className = 'conn ' + cls; conn.textContent = text; };
+
+    const send = connect('remote', (msg) => {
+      if (msg.type === 'replaced') return document.getElementById('moved').hidden = false;
+      if (msg.type === 'rejected') rejected = true;
+      if (msg.type === 'disconnected') {
+        return rejected
+          ? setConn('bad', 'Пульт отключён с ноутбука')
+          : setConn('bad', 'Нет связи с ноутбуком, переподключаюсь…');
+      }
+      if (msg.type === 'status') {
+        rejected = false;
+        setConn('ok', 'На связи');
+        showStatus((lastStatus = msg));
+      }
+      if (msg.type === 'settings' && padKey(msg.settings) !== padKey(settings)) {
+        settings = msg.settings;
+        mount();
+      }
+    });
+
+    function mount() {
+      showStatus = renderPad(document.getElementById('pad'), settings, (m) => {
+        send(m);
+        if (m.cmd !== 'volume') navigator.vibrate?.(30);
+      }, { tabs: true });
+      showStatus(lastStatus);
+    }
+    mount();
+  </script>
+</body>
+</html>

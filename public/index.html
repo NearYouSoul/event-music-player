@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Event Music Player</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <nav>
+    <div class="brand"><i></i>EVENT<b>PLAYER</b></div>
+    <button data-tab="live" class="active">Эфир</button>
+    <button data-tab="jingles">Разметка отбивок</button>
+    <button data-tab="pads">Пэды</button>
+    <button data-tab="settings">Настройки</button>
+  </nav>
+  <main>
+    <section class="tab active" id="tab-live">
+      <div id="live-off" class="start">
+        <h1>Готов к эфиру?</h1>
+        <p class="muted">Браузер разрешает звук только после клика, поэтому эфир включается вручную.</p>
+        <button id="go-live" class="go-live">▶ Начать эфир</button>
+      </div>
+      <div id="live-on" class="live" hidden>
+        <aside class="side">
+          <div class="card qr">
+            <h3>Пульт на телефоне</h3>
+            <img id="qr" alt="QR">
+            <code id="qr-url"></code>
+            <p class="muted small" id="qr-other"></p>
+          </div>
+          <div class="card">
+            <div class="row"><span id="remote-state">Пульты разрешены</span><span class="grow"></span>
+              <span class="pill" title="Устройства — разные телефоны, соединения — открытые вкладки пульта">
+                устройств: <b id="remote-devices">0</b> · вкладок: <b id="remotes">0</b></span></div>
+            <button class="btn wide" id="lock">Отключить пульты</button>
+          </div>
+          <div class="card keys small">
+            <div><kbd>Пробел</kbd> отбивка</div><div><kbd>Esc</kbd> стоп отбивки</div>
+            <div><kbd>1–8</kbd> пэды</div><div><kbd>P</kbd> фон play/pause</div>
+            <div><kbd>S</kbd> фон stop</div><div><kbd>N</kbd> следующий трек</div>
+          </div>
+        </aside>
+        <div id="live-pad"></div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-jingles">
+      <div class="editor">
+        <div class="card">
+          <div class="row"><h3>music/jingles</h3><span class="grow"></span>
+            <button class="btn" id="j-reload" title="Пересканировать папку">⟳</button></div>
+          <label class="check"><input type="checkbox" id="j-show-tags"> Показывать разделы на пульте</label>
+          <div class="tagbar" id="j-tags"></div>
+          <div class="list" id="j-list"></div>
+        </div>
+        <div class="card" id="j-editor">
+          <p class="muted">Выбери трек слева. Клик по волне — перемотка, колесо мыши — зум.
+            <b>Пробел</b> — play/pause, <b>M</b> — поставить точку.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-pads">
+      <div class="pads-setup">
+        <div class="card">
+          <h3>Пэды</h3>
+          <p class="muted small">Перетащи на пэд mp3 или картинку прямо из проводника.
+            На пульте показываются только пэды со звуком.</p>
+          <div class="pads edit-grid" id="p-grid"></div>
+        </div>
+        <div class="card" id="p-editor"><p class="muted">Выбери пэд, чтобы настроить название и обрезку.</p></div>
+      </div>
+    </section>
+
+    <section class="tab" id="tab-settings">
+      <div class="card narrow">
+        <h3>Настройки</h3>
+        <div class="form" id="set-form"></div>
+        <p><button class="btn accent" id="set-save">💾 Сохранить</button> <span id="set-msg" class="muted"></span></p>
+      </div>
+    </section>
+  </main>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>

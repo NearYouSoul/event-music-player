@@ -1,0 +1,87 @@
+{
+  "pads": [
+    {
+      "name": "ACE",
+      "file": "FIVB Volleyball - ACE ACE - Restored - Restored (Universal Enhancer).mp3",
+      "image": "Снимок экрана 2026-10-24 214316.png",
+      "start": 0,
+      "end": 9.47,
+      "fadeIn": 0.3,
+      "fadeOut": 2
+    },
+    {
+      "name": "BOOM",
+      "file": "FIVB Volleyball — Here comes the BOOM! (www.lightaudio.ru).mp3",
+      "image": "Снимок экрана 2026-10-24 214301.png",
+      "start": 0.61,
+      "end": 16.62,
+      "fadeIn": 0.4,
+      "fadeOut": 2
+    },
+    {
+      "name": "BLOCK",
+      "file": "Monster block.mp3",
+      "image": "Снимок экрана 2026-10-24 214336.png",
+      "start": 0,
+      "end": 14.57,
+      "fadeIn": 0,
+      "fadeOut": 1.7
+    },
+    {
+      "name": "faaah",
+      "file": "faaah.mp3",
+      "image": null,
+      "start": 0.2,
+      "end": null,
+      "fadeIn": 0,
+      "fadeOut": 0.3
+    },
+    {
+      "name": "rat-dance",
+      "file": "rat-dance-music.mp3",
+      "image": null,
+      "start": 0,
+      "end": null,
+      "fadeIn": 0,
+      "fadeOut": 3
+    },
+    {
+      "name": "what",
+      "file": "udar-ot-vzgliada-skaly.mp3",
+      "image": null,
+      "start": 0,
+      "end": null,
+      "fadeIn": 0,
+      "fadeOut": 0
+    },
+    {
+      "name": "wow!",
+      "file": "anime-wow-sound-effect.mp3",
+      "image": null,
+      "start": 0,
+      "end": null,
+      "fadeIn": 0,
+      "fadeOut": 0
+    },
+    {
+      "name": "aura",
+      "file": "auraa.mp3",
+      "image": null,
+      "start": 4.66,
+      "end": null,
+      "fadeIn": 1,
+      "fadeOut": 3
+    }
+  ],
+  "bgCrossfade": 6,
+  "jingleDuration": 14,
+  "jingleFadeOut": 3.5,
+  "bgStopFade": 5,
+  "duckLevel": 0.1,
+  "masterVolume": 0.651999511718749,
+  "bgVolume": 1,
+  "jingleTags": [
+    "рок"
+  ],
+  "showJingleTags": false
+}

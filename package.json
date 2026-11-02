@@ -1,0 +1,20 @@
+{
+  "name": "event-music-player",
+  "version": "1.0.0",
+  "description": "Локальный пульт музыки для мероприятий",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "express": "^5.3.0",
+    "qrcode": "^1.5.4",
+    "wavesurfer.js": "^8.0.3",
+    "ws": "^8.22.0"
+  },
+  "private": true
+}
