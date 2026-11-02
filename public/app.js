@@ -1151,7 +1151,7 @@ async function renderOutputs(ask = false) {
     return `<div class="out-row" data-role="${role}">
       <b class="out-name out-${role}">${name}</b>
       <select ${named ? '' : 'disabled'}>
-        <option value="">Системный выход по умолчанию</option>
+        <option value="">Системный выход</option>
         ${outDevices.map((d, i) => `<option value="${i}" ${d.deviceId === c.id || (d.label && d.label === c.label) ? 'selected' : ''}>${escapeHtml(d.label || 'Устройство ' + (i + 1))}</option>`).join('')}
         ${c.id && !known ? `<option selected disabled>Нет: ${escapeHtml(c.label)}</option>` : ''}
       </select>

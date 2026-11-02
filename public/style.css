@@ -178,6 +178,7 @@ main { padding: 20px; }
 #live-pad, #pad { position: relative; }
 .deck-grid { display: grid; grid-template-columns: minmax(320px, 1.3fr) minmax(300px, 1fr); gap: 18px; align-items: start; }
 .deck-grid.tabs { grid-template-columns: 1fr; }
+.deck-grid > *, .side > * { min-width: 0; } /* колонки не растягиваются от длинного содержимого */
 .side { display: grid; gap: 18px; align-content: start; }
 .deck-grid.tabs .side { display: contents; }
 .deck { padding: 18px; }
@@ -589,7 +590,7 @@ main { padding: 20px; }
 .b-groups > .muted { width: 72px; }
 .b-groups .tagbar { margin: 4px 0; }
 .bg-place { margin: -6px 0 10px; font-size: 13px; color: var(--cobalt); }
-.bgsrc { margin: -4px 0 14px; }
+.bgsrc { margin: -4px 0 14px; flex-wrap: wrap; } /* источников бывает много — переносятся, а не распирают колонку */
 .bgsrc .jtag.active { color: var(--cobalt); box-shadow: inset 0 0 0 1px rgba(77, 168, 255, .6); background: rgba(77, 168, 255, .08); }
 
 /* ===== Пэды: редактор ===== */
@@ -677,6 +678,7 @@ main { padding: 20px; }
   border: 1px solid #0b0d10;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .8), inset 0 -2px 0 rgba(0, 0, 0, .25), 0 6px 0 #0b0d10, 0 24px 60px rgba(0, 0, 0, .55);
 }
+.console, .levels { background-size: 2000px 300px, auto; } /* шлифовка шире панели — без видимого шва повтора */
 .tex-aluminum .console { background: linear-gradient(180deg, rgba(255, 255, 255, .25), rgba(0, 0, 0, .12)), url(/textures/aluminum.jpg) center / 600px, #c4cad1; }
 .console-plate { display: flex; align-items: center; gap: 14px; padding: 12px 0 14px; border-bottom: 1px solid rgba(0, 0, 0, .18); box-shadow: 0 1px 0 rgba(255, 255, 255, .5); margin-bottom: 16px; }
 .console-plate b { font-size: 17px; font-weight: 700; font-stretch: 87.5%; color: #1b1f25; text-shadow: 0 1px 0 rgba(255, 255, 255, .6); }
@@ -919,6 +921,7 @@ dialog.plugin::backdrop { background: rgba(6, 8, 10, .72); backdrop-filter: blur
   border: 1px solid #0b1430;
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25), inset 0 -2px 0 rgba(0, 0, 0, .3), 0 30px 80px rgba(0, 0, 0, .7);
 }
+.hw-comp .hw-brand b { font-size: 22px; }
 .hw-knobs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px 4px; justify-items: center; }
 .vu { padding: 7px; border-radius: 6px; background: #0d1530; box-shadow: inset 0 2px 8px #000, 0 1px 0 rgba(255, 255, 255, .2); }
 .vu canvas { display: block; width: 100%; height: 150px; border-radius: 3px; }
