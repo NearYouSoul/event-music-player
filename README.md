@@ -52,7 +52,7 @@
 
 ## 🚀 Быстрый старт
 
-1. Скачай программу: на странице репозитория **Code → Download ZIP** и распакуй.
+1. Скачай программу: на странице [последнего релиза](https://github.com/NearYouSoul/event-music-player/releases/latest) в разделе **Assets** возьми архив `Event-Music-Player-v….zip` и распакуй.
 2. Положи музыку в папки (они создадутся сами при первом запуске):
    - `music/background/` — фоновая музыка;
    - `music/jingles/` — треки для отбивок.
